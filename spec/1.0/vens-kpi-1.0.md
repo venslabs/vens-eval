@@ -1,14 +1,14 @@
 > **DRAFT, not frozen.** Values V1 to V4, V6 and V7 are chosen but not signed, and V5 is open (§7); the English text becomes normative when it is signed and hashed.
 
-# vens-eval/1.0
+# vens-kpi/1.0
 
 Evaluation framework for vens: a merge of the texts signed in round 2 by Claude Fable 5.2 and GPT-6.1 Sol, following the coordinator's rulings (2026-11-25). To be signed by both reviewers, then by the maintainer; values V1 to V4, V6 and V7 chosen by the maintainer on 2026-11-26, V5 open until the human panel (§7).
 
 ## 1. Purpose
 
-`vens-eval/1.0` evaluates the severity vens gives a CVE **conditionally on the declared context**: vens takes that configuration as true, and the judges who assess vens receive the same facts.
+`vens-kpi/1.0` evaluates the severity vens gives a CVE **conditionally on the declared context**: vens takes that configuration as true, and the judges who assess vens receive the same facts.
 Claiming that this configuration is the actual deployment would require verification in the field.
-The result: a vector of nine axes and a delivery verdict, with no sum, weight or average.
+The result: a vector of nine axes and a delivery verdict, with no sum, weight or average. A KPI is the measured quantity on a line; an axis groups lines and is read by state, never as one number.
 
 ## 2. The axes
 
