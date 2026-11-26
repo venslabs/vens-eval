@@ -6,7 +6,7 @@ Evaluation framework for vens: a merge of the texts signed in round 2 by Claude 
 
 ## 1. Purpose
 
-`vens-eval/1.0` evaluates the severity vens gives a CVE **conditionally on the declared context**: vens takes that configuration as true, and its judges receive the same facts.
+`vens-eval/1.0` evaluates the severity vens gives a CVE **conditionally on the declared context**: vens takes that configuration as true, and the judges who assess vens receive the same facts.
 Claiming that this configuration is the actual deployment would require verification in the field.
 The result: a vector of nine axes and a delivery verdict, with no sum, weight or average.
 
@@ -26,8 +26,8 @@ The result: a vector of nine axes and a delivery verdict, with no sum, weight or
 
 - **R**: the last shipped version, identified by its artifacts, rerun with the candidate in the same window (interleaved order) or replayed on the same answers.
 - **Reading**: per context, model and model pair, worst first, never pooled [38], with the regressed and the corrected CVEs [34]; a missing or unusable case stays in the denominator.
-- **A5 has three lines, each passing on its own**: repetitions (pairwise agreement, per model); models (agreement per model pair); diversity guard, the chance that two CVEs from the same run get different bands (1 − Σ shares²), read against R, blocking and waivable. H and W are still printed [32].
-- **A9 has two blocking lines, each passing on its own**: cost and time, with no product and no common score.
+- **A5 has three lines, each of which must pass on its own**: repetitions (pairwise agreement, per model); models (agreement per model pair); diversity guard, the chance that two CVEs from the same run get different bands (1 − Σ shares²), read against R, blocking and waivable. H and W are still printed [32].
+- **A9 has two blocking lines, each of which must pass on its own**: cost and time, with no product and no common score.
     - **What is fixed**: each comparison fixes the context, the provider, the exact model version and parameters, the scan of N CVEs, the input order, the machine and the external quotas.
     - **The blocking profile**: the shipped settings of each version (batch, internal concurrency, attempts, cache), recorded in the frozen file (fichier gelé). Today, that is a batch of 10 and serial calls on both sides. Any other profile is compared separately, with R rerun, without blocking; no cell compensates for another.
     - **The cache**: its initial state is comparable across versions; warm-up and amortization are fixed before the campaign, and counted.
@@ -38,7 +38,7 @@ The result: a vector of nine axes and a delivery verdict, with no sum, weight or
     - **Aborted run**: it is flagged and its cost is kept; its partial duration proves neither satisfaction nor gain.
     - **Mock counters** (attempted calls, UTF-8 bytes of the system and user prompts, schemas counted separately): these are indicators. An increase of more than 5% prints "A9 alert" (« alerte A9 ») and yields no state.
 - **A3 counts the pairs the judges distinguish**, not the spread [8]; the mapping of the scanner and of the constant band onto the bands of vens is written before the test.
-- **NOT MEASURED (NON MESURÉ) as long as the instrument is missing**: A3 (human panel), A6 (variants); for A9, each line without comparable real runs of the candidate and of R in the same window, with USD and durations recorded. The absence of an absolute cap does not dispense with V6; mock counters and partial observations are printed anyway. α, κ and ICC remain diagnostics, never thresholds [10]–[12].
+- **NOT MEASURED (NON MESURÉ) as long as the instrument is missing**: A3 (human panel), A6 (variants); for A9, each line without comparable real runs of the candidate and of R in the same window, with USD and durations recorded. The absence of an absolute cap does not exempt a line from V6; mock counters and partial observations are printed anyway. α, κ and ICC remain diagnostics, never thresholds [10]–[12].
 
 ## 3. The grading scale
 
@@ -70,7 +70,7 @@ The result: a vector of nine axes and a delivery verdict, with no sum, weight or
 - **Targets**: when a target is not met, the absolute field reads BELOW TARGET (SOUS LA CIBLE), without blocking in 1.0, because F, the reference of #310, holds 90% between repetitions on only 1 model × context line out of 6 (Fable). The lines at 100% (A1, A2, A7, A8 trace) block. Severe errors are listed one by one, with an exact bound and its sample size: on 74 CVEs with no event, the bound is still 3.97% (one-sided).
 - **Reading against R**: d = candidate − R, paired by CVE, bootstrap over CVE clusters, two-sided 95% interval [33], [35]. SATISFIED if the lower bound ≥ −δ; PROGRESS ESTABLISHED if the corrected lower bound > 0, with no materiality threshold; FAILED if the corrected upper bound < −δ; otherwise UNDETERMINED, after a single extension of repetitions planned in advance.
 - **δ**: 0 on paired replay (model request unchanged); on fresh answers, a *tolerated loss* (perte tolérée), named as such and set by the maintainer before the campaign (V1). An archived reference (P1) reads FAILED or UNDETERMINED, never PROGRESS ESTABLISHED, without saying whether the loss comes from vens or from the model.
-- **Multiplicity**: holding requires all lines (intersection-union), without correction; failures and gains go through Holm at 5% on the frozen list of primary lines. A line blocks only if the $0 same-version replay shows at most 0.05 false alarms on it; otherwise it is published, non-blocking. The verdict is re-read with δ halved and doubled [31].
+- **Multiplicity**: meeting the requirements needs every line to pass (intersection-union), without correction; failures and gains go through Holm at 5% on the frozen list of primary lines. A line blocks only if the $0 same-version replay shows a false-alarm rate of at most 0.05 on it; otherwise it is published, non-blocking. The verdict is re-read with δ halved and doubled [31].
 - **A9 protocol**, frozen before the campaign:
     - **The reading**: the ratio of means, candidate / R. The unit of uncertainty is the block of paired runs, with its dependencies, never the call or the CVE.
     - **Fixed in advance**: sample size, pairing, interval and test method, stopping rules and the single extension. Both lines join the frozen list of primary lines.
@@ -83,7 +83,7 @@ The result: a vector of nine axes and a delivery verdict, with no sum, weight or
 ## 4. Waivers
 
 - **Printing**: "FAILED, waiver granted" (« ÉCHEC, dérogation accordée »), or "UNDETERMINED, shipped with declared uncertainty" (« INDÉTERMINÉ, livré avec incertitude déclarée »). The state never changes; "pass (waived)" does not exist.
-- **Waiver sheet** (fiche) [19]: failing axis and lines word for word, reference kept, loss, interval and maximum allowed loss, cause, consequences and compensating controls, follow-up, author, date, expiry (V7). Reprinted with every version until closure; the previous target remains the target. Signable after the result is read, without moving any threshold.
+- **Waiver sheet** (fiche) [19]: failing axis and lines word for word, the reference that stays in force, loss, interval and maximum allowed loss, cause, consequences and compensating controls, follow-up, author, date, expiry (V7). Reprinted with every version until closure; the previous target remains the target. Signable after the result is read, without moving any threshold.
   For A9:
     - **Who signs**: the maintainer alone signs the acceptance; the reviewers check the evidence.
     - **What the waiver sheet states**: the lines, cells and profiles concerned, R, the values and intervals, the maximum allowed and the expiry (V7).
@@ -95,7 +95,7 @@ The result: a vector of nine axes and a delivery verdict, with no sum, weight or
 
 ## 5. Aggregation
 
-1. **Order**: tiers 0, 1, 2, then 3, all measured and published, even after a failure higher up. A breakdown of vens is an A7 result; only a breakdown of the evaluation setup makes what it touches UNDETERMINED.
+1. **Order**: tiers 0, 1, 2, then 3, all measured and published, even after a failure at an earlier tier. A breakdown of vens is an A7 result; only a breakdown of the evaluation setup makes what it touches UNDETERMINED.
 2. **No compensation**: no weight, no sum, no average, between axes or between lines [31]. The full vector is published; the headline (titre) is the weakest state [1], [3]. A quality gain does not compensate for FAILED on A9.
 3. **Four delivery verdicts**:
     - *validated without waiver* (validée sans dérogation): every blocking line measured at P2, SATISFIED or PROGRESS ESTABLISHED; any blocking line NOT MEASURED rules it out, including each of the two A9 lines;
@@ -112,7 +112,7 @@ The result: a vector of nine axes and a delivery verdict, with no sum, weight or
 ## 6. Governance
 
 - **Freeze**: a single file, versioned and hashed: axes, measurements, targets, margins, values V1 to V7, primary lines, seeds, models, repetitions, stopping rules, fingerprints of the sets and of the readers. Two reviewer signatures, then the maintainer's agreement; human ratings sealed before seeing the outputs [47], [48].
-- **Changing the framework**: (1) write down a cause independent of the result: the text of a method, a reader error, a retired model, a new version of OWASP, a line with false alarms, a new attack surface; (2) state which interpretation becomes false, "the candidate fails" not being a cause; (3) bump the version before the next campaign, never together with a vens rule nor between an agreement and its reading; (4) re-read under the new framework the versions still being compared, or declare them non-comparable; (5) publish the effect of the framework separately. Old verdicts stay within their framework.
+- **Changing the framework**: (1) write down a cause independent of the result: the text of a method, a reader error, a retired model, a new version of OWASP, a line with false alarms, a new attack surface; (2) state which interpretation becomes false, "the candidate fails" not being a cause; (3) bump the version before the next campaign, never together with a change to a vens rule, nor between a campaign's sign-off and its reading; (4) re-read under the new framework the versions still being compared, or declare them non-comparable; (5) publish the effect of the framework separately. Old verdicts stay within their framework.
 - **Before each campaign, at $0** [1], [33]: same-version replay (false alarms; not the noise of fresh answers), smallest visible loss per line, judge agreement, and deliberately defective candidates that the readers must fail: always "medium", random bands, inverted threshold or wrong impact basis, context ignored, instruction followed, hard CVEs removed, invented source. A simple and correct candidate on a homogeneous context must, for its part, pass. A faulty reader makes its conclusion UNDETERMINED until a versioned correction.
 - **Sets**: the 74 demo CVEs and their three contexts, in diagnostic use since October, form a development set. The verdict reads a sealed set, once per candidate, and a rotating batch of CVEs published after the last freeze, under a rule fixed in advance [16]; GPT adds a confirmation batch to it (V3). A set that has been used for diagnosis is no longer called independent [46]; all runs of all candidates are published [45].
 - **Models**: a frozen list per version. When a model is retired, a bridge campaign runs the old and the new list on R in the same window; if the old one has already disappeared, the break is declared.
@@ -127,7 +127,7 @@ Each value is signed before the campaign and goes into the frozen file.
 |---|---|---|---|---|
 | V1 | Tolerated loss (fresh answers) | 0.10 (repetitions, guard); frozen S2 limits, 0.08 / 0.072 / 0.066 (models) | 0; S2 limits kept within their protocol | — |
 | V2 | Repetitions | 5 per cell, instead of 2 | 5 per cell and per version; two models from distinct providers | equal |
-| V3 | Sealed set, rotating batch | 100 CVEs × 3 contexts; 30 recent CVEs per campaign (no source) | at least 300 independent CVEs per batch × 3 contexts; main batch and confirmation batch, renewed after exposure | **GPT** |
+| V3 | Sealed set, rotating batch | 100 CVEs × 3 contexts; 30 recent CVEs per campaign (no source cited) | at least 300 independent CVEs per batch × 3 contexts; main batch and confirmation batch, renewed after exposure | **GPT** |
 | V4 | Context reaction | a pair reacts if 8 repetitions out of 10 move | L95 ≥ 90% of the pairs that must move; no "8 out of 10", which treats repetitions as scenarios | **GPT** |
 | V5 | Validity thresholds | do better than the scanner; thresholds after the first human panel (at 36 vignettes, 80% requires 33 out of 36) | L95 ≥ 80% admissible bands; U95 ≤ 1% severe underestimations; L95 ≥ 90% ordered contrasts; non-inferior to the simple comparators | **GPT** |
 | V6 | A9 tolerance and caps (agreed by both in round 2 of the cost and time debate, 2026-11-25) | +5% per line against R; minimum material gain of 5%; no absolute cap as long as the maintainer does not sign one; any increase beyond that is FAILED, acceptable under a waiver sheet (§4) | identical | equal: instrumentation and mock; no added calls if the quality runs follow the protocol; otherwise the missing real runs of R |
