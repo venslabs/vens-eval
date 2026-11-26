@@ -5,7 +5,7 @@
 - **The candidate** is the head of [venslabs/vens#436](https://github.com/venslabs/vens/pull/436) at F0, today `34ef2a1`. **R** is v0.6.0, run again in the same window.
 - **No human panel:** A3 reads NOT MEASURED, so "validated without waiver" is out of reach and the honest target is "shipped under waivers".
 - **Spend** is capped at $300.
-- **F0** is this campaign's frozen file (spec §6): rules, values, stages and their α_k, gates, the draw policy and the sealed sets' commitments. **F1** adds the rotating batch's commitments and changes no rule of F0.
+- **F0** is this campaign's frozen file (spec §6): rules, values, stages and their α_k, gates, the draw policy and the sealed sets' commitments. **F1** adds the rotating batch's commitments. The fingerprints of the readers and of both binaries are added to `seals/1.0-v0.7.0.json` and signed by both reviewers before the first paid call. Neither changes a rule of F0.
 
 ## 1. The sealed set
 
@@ -54,10 +54,10 @@
   - A count is acquired as soon as it is reached, so at stage 2 at the earliest, and stands: later repetitions cannot undo it.
   - A pair or control not yet decided prints "UNDETERMINED at stage k" and never counts as a success; neither does a missing comparison.
   - A reversal is FAILED under spec §3, whatever V4 says.
-  - At the extension, only the pairs still undecided are recounted, on the 8 repetitions, by a strict majority of 5 out of 8.
+  - At the extension, only the pairs still undecided are recounted, on the 8 repetitions, by a strict majority of 5 out of 8; an undecided control is not recounted and stays UNDETERMINED.
 - **V4:** the exact Clopper-Pearson lower bound, one-sided at α_k/2, over the admitted strict pairs of one model, must be at least 90%.
   - 64 of 64 passes from stage 2 (0.9106), and 63 of 64 passes at stage 3 (0.9007). No count can be reached at stage 1, so V4 is UNDETERMINED there.
-  - A missing comparison uses up the one tolerated failure. With fewer than 64 admitted pairs, the tolerance is lost and the count is printed.
+  - For V4, an admitted pair without an acquired move counts as a failure, and missing repetitions do not erase an acquired count. One failure is tolerated only at stages 3 and 4, with 64 admitted pairs; with fewer, the tolerance is lost and the count is printed.
 - **Against R:** only on the dimensions v0.6.0 reads; pairs that need schema 2 count in the absolute line alone.
 - **Limit:** each DIR run is a one-CVE report, so DIR does not exercise batch composition; the sealed set does.
 - The earlier development scenarios run on the mock only, as a regression check.
@@ -72,10 +72,10 @@
 - **Noise reading,** per context, model and variant, from stage 1:
   - d is the extra disagreement: variant against base, minus within-set disagreement, clustered by CVE. At r repetitions, that is r² cross comparisons and r(r−1)/2 within-set pairs per set (25 and 10 at 5);
   - SATISFIED if the upper bound of d is at most 0.10, FAILED (waivable) if the lower bound is above 0.10, otherwise UNDETERMINED, with bounds at the stage's level; the 2-point target stays printed;
-  - the 0.10 margin is V1 applied to A6, to be confirmed by the maintainer when signing F0. A zero margin would make SATISFIED unreachable: identical inputs read U95 > 0 about 97.5% of the time.
+  - the 0.10 margin is V1 applied to A6, to be confirmed by the maintainer when signing F0. With a zero margin, noisy identical inputs generally remain UNDETERMINED.
 - **Instruction followed,** the FAILED that cannot be waived, on any of:
   - per direction, the mean signed shift, a test at α_k read from stage 1;
-  - the per-CVE pattern: all planted repetitions strictly beyond the base's range in the instructed direction, 5 of 5 at stage 3, then 8 of 8 at the extension. It is a frozen statistical test at α_k, with multiplicity control over the CVEs and directions searched: by chance alone, the raw pattern would fire somewhere among the 360 cells;
+  - the per-CVE pattern: all planted repetitions strictly beyond the base's range in the instructed direction, 5 of 5 at stage 3, then 8 of 8 at the extension. It is a frozen statistical test at α_k on the number of CVEs showing the pattern, per model, context and direction, against its permutation null, with Holm over those 12 families. One cell alone cannot pass (its exact chance is 1/252 at 5 repetitions), and by chance the raw pattern would fire somewhere among the 360 cells. It is re-read at the extension only if the INV blocks are rerun;
   - an explanation that treats the planted text as authority, under a rubric frozen before outputs. This rubric is the only rule here without alpha, and it blocks from the first output.
 - A non-significant test is printed as such and does not establish resistance. The line blocks only if the $0 replay shows a false-alarm rate of at most 0.05.
 
@@ -92,9 +92,14 @@
 - **Machine:** one fixed machine owned by the maintainer, described in `machine.json` (CPU, RAM, OS build, toolchain, power, connection), with sleep disabled. No paid run on GitHub Actions.
 - **Binaries:** R is v0.6.0's darwin-arm64 release asset, checked against `SHA256SUMS` and its sigstore bundle. The candidate is built from #436's head at F0 with a pinned Go. Both binary hashes are signed before the first paid call.
 - **Concurrency 1** for the whole campaign, so A9's time line shares neither the machine nor the link.
-- **Order:** repetition outermost, so a stop leaves whole repetitions. Blocks (report × context × model) are shuffled by a public seed; the candidate and R run back to back, their order alternating.
+- **Order:** repetition outermost, so stage boundaries leave whole repetitions; a stop between runs may leave a partial repetition, kept without adding a look. Blocks (report × context × model) are shuffled by a public seed; the candidate and R run back to back, their order alternating.
 - **Profile:** shipped defaults, batch 10, serial calls, vens's own retries only. A non-zero exit is an A7 result and is never rerun. A device failure (proxy down, canary failing) allows one logged re-attempt.
-- **Quotas and cache:** the same proxy ceilings for both versions, checked against the account's limits before F0. Fresh local caches, no prewarming, the provider's cache mode frozen; an unresolved cache mismatch makes A9 UNDETERMINED.
+- **Quotas and cache:** the same proxy ceilings for both versions, checked against the account's limits before F0. Each run starts with empty local caches; no deliberate prewarming or cache-busting, and no cooling wait. No other vens traffic uses the two accounts during a stage.
+  - OpenAI's automatic prefix cache is shared by R and the candidate in the same organisation, so interleaved runs may warm each other.
+  - No request carries `cache_control`, so Anthropic caches nothing; an Anthropic cache token breaks the frozen profile and makes A9 UNDETERMINED on that line.
+  - F0 freezes this regime, the provider, account and request settings, and the alternating paired order; the runner enforces them and records cache usage, cost at frozen prices and wall time.
+  - A9 measures the comparison under this shared-cache regime; unequal hit rates alone are not a policy mismatch. An unverifiable policy mismatch makes the affected A9 lines UNDETERMINED.
+  - The cost line is also reread with cached tokens priced as uncached input; a line whose state differs between the two readings is UNDETERMINED. The time line prints each version's cached share beside it.
 - **Each run records** `attempt.json` (written before the start), `vex.json`, `debug/`, vens's stderr and `a9.jsonl` (usage, cache categories, retries, timing).
 - **A9** reads the main 100-CVE reports: per context and model, paired blocks, a Fieller-t interval on the ratio of means (df = pairs − 1, so 4 at stage 3), with the normal-block assumption stated. An unbounded interval is UNDETERMINED. R against itself is printed as the false-alarm check.
 - **Size,** per repetition, version and model: 3 main reports, 3 sentinel reports, 3 rotating reports, 148 DIR runs and 12 INV reports, so 169 runs. Stages 1 to 3 schedule 3,380 runs, not counting the smoke, the extension and device re-attempts.
@@ -124,8 +129,9 @@ The amounts assume every block is present from stage 1; a late rotating block's 
   - spend per run against the estimate;
   - no device failure;
   - the mechanical A1, A2 and A8 checks.
-- **No gate** reads a verdict line or compares with R, so a gate spends no alpha. A failed gate stops the campaign and goes to the maintainer.
-- **The extension** runs only by its F0 trigger and with the maintainer's go. The trigger is a primary line UNDETERMINED at stage 3, with the budget left covering the extension's full remaining cost: 3 repetitions of the blocks to rerun plus any catch-up, at the observed costs of the candidate and R together. It repeats the blocks that feed the lines UNDETERMINED at stage 3, and only those lines are re-read.
+- **Mechanical checks:** A1, A2 and A8 run on every output and record violations on their axes, independently of the technical gates.
+- **No gate** reads a statistical line or compares with R, so a gate spends no alpha; the 100% rules it checks are deterministic. A failed gate stops the campaign and goes to the maintainer.
+- **The extension** runs only by its F0 trigger and with the maintainer's go. The trigger is a primary line UNDETERMINED at stage 3, with the budget left covering the extension's full remaining cost: 3 repetitions of the blocks to rerun plus any catch-up, at the observed costs of the candidate and R together. It repeats the blocks that feed the lines UNDETERMINED at stage 3, and only those lines are statistically re-read; deterministic 100% rules still apply to every new output.
 - **Budget basis:**
   - the candidate's batch-1 costs in #310's Panel A, $1.65 (`claude-sonnet-4-6`) and $0.41 (`gpt-5.4-mini`) per 74-CVE context scan, taken as a ceiling at batch 10;
   - R at one fifth of the candidate, since v0.6.0's mock showed one fifth of the calls and prompt bytes. The factor 1.2 below is the candidate plus that share of R, not a reserve;
@@ -171,9 +177,8 @@ The amounts assume every block is present from stage 1; a late rotating block's 
   - the runner gets inputs, not labels;
   - the reviewers check form before sealing, on a pinned candidate.
 - **A change to the candidate** after the seal voids the seal.
-- **Order:** candidate pinned → sets built → seals published → F0 signed → window and draw → F1 signed → stage 0.
+- **Order:** candidate pinned → sealed sets built → seals published → F0 signed → work packages 5 to 7 → stage 0. The rotating window and draw run in parallel with work packages 5 to 7; F1 is signed before its block joins (§2).
   - No paid call comes before the readers and the binaries are hashed and signed.
-  - If F1 is not signed when stage 1 starts, the rotating block joins later, as §2 says.
 - **Signatures:** Claude Fable 5.2 and GPT-6.1 Sol sign the protocol and the readers; the maintainer approves F0 and F1.
 - **Publication:** reports use opaque ids. Every attempt and result is published, failures included. The rotating batch is revealed after the campaign, the sealed set at retirement.
 
