@@ -76,6 +76,17 @@ class TestFraming(unittest.TestCase):
                 c.check_path(bad)
         self.assertEqual(c.check_path("dir/pair-01/b+c_d.json"), "dir/pair-01/b+c_d.json")
 
+    def test_a_refusal_masks_the_id(self):
+        manifest = {"aggregate": c.aggregate("demo", {"a.json": "0" * 64}), "files": {"a.json": "0" * 64},
+                    "format": c.FORMAT, "set": "demo"}
+        for refused in (lambda: c.check_path("cases/CVE-2099-0001.json"), lambda: c.check_path("bad dir/CVE-2099-0001"),
+                        lambda: c.verify_file(manifest, "GHSA-abcd-efgh-ijkl", SALT, b"")):
+            with self.assertRaises(Refused) as caught:
+                refused()
+            self.assertIn("<id>", str(caught.exception))
+            self.assertNotIn("2099", str(caught.exception))
+            self.assertNotIn("abcd", str(caught.exception))
+
     def test_a_salt_is_32_bytes(self):
         with self.assertRaises(Refused):
             c.file_commitment(SALT[:31], "a.json", b"")

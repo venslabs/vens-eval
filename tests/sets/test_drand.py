@@ -181,7 +181,8 @@ class TestFetch(unittest.TestCase):
                        ("https://[2001:db8::1]", "https://drand.cloudflare.com"),
                        ("https://user@api.drand.sh", "https://drand.cloudflare.com"),
                        ("https://api.drand.sh", "https://api.drand.sh."),
-                       ("https://API.drand.sh", "https://api.DRAND.sh.")):
+                       ("https://API.drand.sh", "https://api.DRAND.sh."),
+                       ("https://api.drand.sh.", "https://drand.cloudflare.com")):
             with self.subTest(relays=relays), self.assertRaises(Refused):
                 self.fetch(relays=relays)
 

@@ -179,18 +179,48 @@ Precedence, highest first: caps, families and n, strata, margins, minimums, rank
 
 **Exactness.** Every keep-or-pass decision, and every level in step 5, is an integer program over all the
 constraints at once: one 0/1 variable per row, one per margin value and one per minimum. HiGHS solves it through
-`scipy.optimize.milp` (scipy 1.18.1, pinned and enforced, with no gap and no time limit). A row's answer cannot change
-until a row is kept, so the rows up to the next one the last solution keeps are tested together, and halved to find
-the first that fits; the decisions are those of the row-by-row walk.
+`scipy.optimize.milp`: scipy 1.18.1 and numpy 2.5.4, pinned and enforced at run time, no gap, no time limit. A row's
+answer cannot change until a row is kept, so the rows up to the next one the last solution keeps are tested together,
+and halved to find the first that fits; the decisions are those of the row-by-row walk.
 
 Limits, stated:
-- An infeasibility answer is the solver's own: it carries no certificate. Every selection the solver returns is
-  checked again in exact integer arithmetic before use, and the run stops on a mismatch or on any answer other than
-  optimal or infeasible.
-- Tests compare the selection with a brute force over every subset of 300 small frames (strata, one or two margins,
-  single and list-valued caps, a minimum, families), and run the four frames on which the earlier look-ahead ended
-  short.
-- Time: about 1 to 5 s for n = 100 on frames of 1,000 to 5,000 rows on a laptop, depending on how tight the frame is.
+- **Infeasible needs both solver settings.** Each program is solved with presolve off, and again with presolve on
+  only when the first run says infeasible. "Infeasible" is the answer only when both say so; a selection either run
+  returns is checked in exact integers, so a feasible answer stands on its own.
+  - Why: with presolve on, HiGHS once called a feasible program infeasible. That was 1 frame in 12,300 of the review's
+    brute force, and over about 176,000 calls the two settings disagreed twice, presolve on saying infeasible both
+    times. With presolve off, 0 frames in 15,000 differed.
+  - After the fix, 18,000 frames of the same brute force give 0 differences (seed 4: 3,000; seeds 5 to 8: 3,750
+    each). In the last 15,000, presolve off said infeasible 58,860 times and presolve on agreed every time.
+  - An infeasibility answer still carries no certificate: it is the solver's, twice.
+- **Every selection is re-checked.** Each selection the solver returns is checked in exact integer arithmetic before
+  use. The run stops on a mismatch, or on any answer other than optimal or infeasible.
+- **Tests.**
+  - The selection is compared with a brute force over every subset of the review's 3,000 seed-4 frames: strata, up to
+    two margins, single and list-valued caps, typed minimums, families, reserve tiers.
+  - The five frames that once went wrong are run as tests: four where the earlier look-ahead ended short, and the one
+    where presolve answered wrongly.
+- **Time:** about 1 to 3 s for n = 100 on frames of 1,000 to 5,000 rows on a laptop, depending on how tight the frame
+  is; about 6 s for 10,000 rows.
+
+**The draw policy.** Every input of the seed that someone could re-draw after the round is fixed beforehand, in a
+public file published before the round: re-salting the frame, adding a space to the spec, touching the code, or
+choosing another round or domain would each give a new seed. F0 signs one policy per draw. It names:
+- the draw;
+- the round;
+- the domain;
+- the frame's aggregate, from its commitment manifest;
+- the spec file's SHA-256;
+- the sampler revision.
+
+`policy` writes it, and refuses a round already emitted. `draw` refuses any of these that differs:
+- the beacon's round;
+- the manifest's aggregate;
+- the spec's bytes;
+- the code's revision.
+
+`draw` takes the domain from the policy. Whether the policy was published before its round is a fact of the public
+git history, not something the tool can check.
 
 **Seed and context.** `sample` takes no free seed. It verifies the beacon record and checks that the frame is the
 file the manifest commits under `--frame-path`, with its salt. Then it computes:
@@ -202,19 +232,20 @@ seed    = SHA-256( domain || randomness || context )
 ```
 
 The sampler revision is SHA-256 over every module of `vkpi/sets`, by name, each framed with its source (line ends as
-LF). After the round, the frame, the quotas, the family key and the code can no longer change without changing the
-seed. `--seed` is optional, and accepted only when it equals the seed recomputed from the record.
+LF). `--seed` is optional, and accepted only when it equals the seed recomputed from the record and the policy.
 
 ```
-python3 -m vkpi.sets.sample --frame FRAME.jsonl --frame-path PATH --manifest PUBLIC.json --salts PRIVATE.json \
-    --spec QUOTAS.json --beacon BEACON.json --domain DOMAIN --out SELECTION.json
+python3 -m vkpi.sets.sample policy --draw NAME --round ROUND --domain DOMAIN --manifest PUBLIC.json \
+    --spec QUOTAS.json --out POLICY.json
+python3 -m vkpi.sets.sample draw --frame FRAME.jsonl --frame-path PATH --manifest PUBLIC.json --salts PRIVATE.json \
+    --spec QUOTAS.json --policy POLICY.json --beacon BEACON.json --out SELECTION.json
 ```
 
 Each input is read once: what is hashed and committed is what is parsed. The selection holds:
 - the ids in rank order, with their stage;
 - the report;
-- the seed and what it binds (round, randomness, domain, context, frame aggregate and path, spec hash, sampler
-  revision);
+- the seed and what it binds: draw, round, randomness, domain, context, frame aggregate and path, spec hash, sampler
+  revision, and the policy's SHA-256;
 - the frame's SHA-256.
 
 The screen shows counts only, never an id, refusals included.

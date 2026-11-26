@@ -46,14 +46,19 @@ _SET_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
 _COMMITMENT = re.compile(r"[0-9a-f]{64}")
 
 
+def shown(path):
+    """A path as a refusal may print it: any vulnerability id in it masked."""
+    return _VULN_ID.sub("<id>", path) if isinstance(path, str) else f"a {type(path).__name__}"
+
+
 def check_path(path):
     """A path the public manifest may name."""
     if not isinstance(path, str) or not all(_PART.fullmatch(part) for part in path.split("/")):
-        raise Refused(f"{path!r}: a path is `/`-separated parts of ASCII letters, digits and _ . + -, none starting "
-                      "with a dot")
+        raise Refused(f"{shown(path)!r}: a path is `/`-separated parts of ASCII letters, digits and _ . + -, none "
+                      "starting with a dot")
     if _VULN_ID.search(path):
-        raise Refused(f"{path}: names a vulnerability id (CVE, GHSA or TEMP, whatever the separator), which the public "
-                      "manifest would reveal; use an opaque name")
+        raise Refused(f"{shown(path)}: names a vulnerability id (CVE, GHSA or TEMP, whatever the separator), which "
+                      "the public manifest would reveal; use an opaque name")
     return path
 
 
@@ -161,14 +166,14 @@ def check_salts(private, manifest):
         raise Refused("these salts come from another commit than the manifest's")
     if not isinstance(private["salts"], dict):
         raise Refused("salts: a map from path to salt")
-    return {path: from_hex(value, SALT_BYTES, f"salt of {path}") for path, value in private["salts"].items()}
+    return {path: from_hex(value, SALT_BYTES, f"salt of {shown(path)}") for path, value in private["salts"].items()}
 
 
 def verify_file(manifest, path, salt, content):
     """True when `content` under `path` and `salt` gives the manifest's commitment."""
     files = check_manifest(manifest)
     if path not in files:
-        raise Refused(f"{path} is not in the manifest of {manifest['set']}")
+        raise Refused(f"{shown(path)} is not in the manifest of {manifest['set']}")
     return file_commitment(salt, path, content) == files[path]
 
 
@@ -228,7 +233,7 @@ def _cmd_verify(args):
     if args.file is not None:
         salts = check_salts(private, manifest)
         if args.file not in salts:
-            raise Refused(f"no salt for {args.file}")
+            raise Refused(f"no salt for {shown(args.file)}")
         content = read_file(args.root, args.file)
         return _one_result(args.file, manifest, verify_file(manifest, args.file, salts[args.file], content))
     problems = verify_set(args.root, manifest, private)

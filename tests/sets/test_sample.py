@@ -11,6 +11,7 @@ import tempfile
 import unittest
 from collections import Counter
 from contextlib import redirect_stderr, redirect_stdout
+from unittest import mock
 
 from tests.sets.test_drand import NOW, ROUND, recorded
 from vkpi.sets import commit, drand
@@ -126,6 +127,10 @@ class TestRecorded(unittest.TestCase):
                         and report["caps"][0]["values_at_max"])
 
 
+def _values(value):
+    return set(value) if isinstance(value, list) else {value}
+
+
 def _brute_levels(spec, pick):
     """(rows, rows within margin quotas, rows toward the minimums) of a selection, or None when it breaks a limit."""
     if len(pick) > spec["n"] or ("family" in spec and len({r["fam"] for r in pick}) < len(pick)):
@@ -133,19 +138,17 @@ def _brute_levels(spec, pick):
     if any(sum(r["s"] == value for r in pick) > quota for value, quota in spec["rows"]["quotas"].items()):
         return None
     for cap in spec.get("caps", []):
-        counts = Counter(v for r in pick for v in (r[cap["attribute"]] if isinstance(r[cap["attribute"]], list)
-                                                    else [r[cap["attribute"]]]))
+        counts = Counter(v for r in pick for v in _values(r[cap["attribute"]]))
         if counts and max(counts.values()) > cap["max"]:
             return None
     within = sum(min(sum(r[m["attribute"]] == v for r in pick), q)
                  for m in spec.get("margins", []) for v, q in m["quotas"].items())
-    toward = sum(min(sum(r[k["attribute"]] is k["value"] for r in pick), k["min"]) for k in spec.get("minimums", []))
+    toward = sum(min(sum(type(r[k["attribute"]]) is type(k["value"]) and r[k["attribute"]] == k["value"]
+                         for r in pick), k["min"]) for k in spec.get("minimums", []))
     return len(pick), within, toward
 
 
-def brute_force(spec, rows, seed):
-    """The first best selection in rank order, by enumerating every subset."""
-    order = sorted(rows, key=lambda r: hashlib.sha256(seed + r["id"].encode()).digest())
+def _first_best(spec, order):
     best = None
     for size in range(spec["n"] + 1):
         for pick in itertools.combinations(range(len(order)), size):
@@ -153,10 +156,24 @@ def brute_force(spec, rows, seed):
             if levels is not None:
                 key = (levels, tuple(i in pick for i in range(len(order))))
                 best = max(best, key) if best else key
-    return [order[i]["id"] for i, taken in enumerate(best[1]) if taken]
+    return best
 
 
-def small_case(rng):
+def brute_force(spec, rows, seed):
+    """The first best selection in rank order, whether it is full and the reserve tier it needs, by enumerating
+    every subset of every pool."""
+    order = sorted(rows, key=lambda r: hashlib.sha256(seed + r["id"].encode()).digest())
+    full = (spec["n"], spec["n"] * len(spec.get("margins", [])), sum(k["min"] for k in spec.get("minimums", [])))
+    tiers = sorted({r.get("tier", 0) for r in rows}) if "reserve" in spec else [0]
+    for tier in tiers:
+        pool = [r for r in order if r.get("tier", 0) <= tier]
+        levels, taken = _first_best(spec, pool)
+        if levels == full or tier == tiers[-1]:
+            return [pool[i]["id"] for i, kept in enumerate(taken) if kept], levels == full, tier
+
+
+def review_case(rng):
+    """A random small frame and spec, as the PR #6 review's brute.py draws them, in the same order of draws."""
     n = rng.randint(2, 5)
 
     def split(parts):
@@ -165,36 +182,66 @@ def small_case(rng):
 
     strata = [f"S{i}" for i in range(rng.randint(1, 3))]
     spec = {"format": s.SPEC_FORMAT, "n": n,
-            "rows": {"attribute": "s", "quotas": dict(zip(strata, split(len(strata))))},
-            "caps": [cap for cap, wanted in (({"attribute": "img", "max": rng.randint(1, 2)}, rng.random() < 0.7),
-                                             ({"attribute": "pkg", "max": rng.randint(1, 2)}, rng.random() < 0.4))
-                     if wanted]}
-    spec["margins"] = [{"attribute": f"m{m}", "quotas": dict(zip(values, split(len(values))))}
-                       for m, values in enumerate([["a", "b"], ["x", "y", "z"]][:rng.randint(0, 2)])]
+            "rows": {"attribute": "s", "quotas": dict(zip(strata, split(len(strata))))}}
+    caps = []
+    if rng.random() < 0.7:
+        caps.append({"attribute": "img", "max": rng.randint(1, 3)})
+    if rng.random() < 0.4:
+        caps.append({"attribute": "pkg", "max": rng.randint(1, 2)})
+    if caps:
+        spec["caps"] = caps
+    margins = [["a", "b"], ["x", "y", "z"]][:rng.randint(0, 2)]
+    if margins:
+        spec["margins"] = [{"attribute": f"m{i}", "quotas": dict(zip(v, split(len(v))))} for i, v in enumerate(margins)]
+    minimums = []
     if rng.random() < 0.5:
-        spec["minimums"] = [{"attribute": "flag", "value": True, "min": rng.randint(1, n // 2 + 1)}]
+        minimums.append({"attribute": "flag", "value": True, "min": rng.randint(0, n // 2 + 1)})
+    if rng.random() < 0.3:
+        minimums.append({"attribute": "flag", "value": False, "min": rng.randint(1, n // 2 + 1)})
+    if rng.random() < 0.3:
+        minimums.append({"attribute": "num", "value": 1, "min": rng.randint(1, 2)})
+    if minimums:
+        spec["minimums"] = minimums
     if rng.random() < 0.5:
         spec["family"] = "fam"
-    rows = [{"id": f"r{i}", "s": rng.choice(strata), "img": f"i{rng.randrange(rng.randint(2, 4))}",
-             "pkg": rng.sample("pqr", rng.randint(1, 2)), "flag": rng.random() < 0.4, "fam": f"f{rng.randrange(6)}",
-             **{m["attribute"]: rng.choice(list(m["quotas"])) for m in spec["margins"]}}
-            for i in range(rng.randint(4, 9))]
+    tiered = rng.random() < 0.4
+    if tiered:
+        spec["reserve"] = "tier"
+    rows = []
+    for i in range(rng.randint(4, 10)):
+        img = f"i{rng.randrange(rng.randint(2, 4))}"
+        if rng.random() < 0.3:
+            img = [img, f"i{rng.randrange(4)}"]
+        row = {"id": f"r{i}", "s": rng.choice(strata), "img": img, "pkg": rng.sample("pqr", rng.randint(1, 2)),
+               "flag": rng.random() < 0.4, "num": rng.choice([1, True, 0, "1"]), "fam": f"f{rng.randrange(6)}"}
+        for margin in spec.get("margins", []):
+            row[margin["attribute"]] = rng.choice(list(margin["quotas"]))
+        if tiered:
+            row["tier"] = rng.choice([0, 0, 0, 1, 2])
+        rows.append(row)
     return spec, rows
 
 
 class TestExact(unittest.TestCase):
-    """Every constraint at once: strata, one or two margins, a single and a list-valued cap, a minimum, families."""
+    """Every constraint at once, on the 3,000 frames of the PR #6 review's brute.py with seed 4: strata, up to two
+    margins, single and list-valued caps (a value listed twice), minimums on typed values, families, reserve tiers.
+    They hold the frame on which HiGHS's presolve answered "infeasible" for a feasible program."""
 
     def test_the_first_best_selection_of_every_small_frame(self):
-        rng, full = random.Random(15), 0
-        for trial in range(300):
-            spec, rows = small_case(rng)
-            seed = hashlib.sha256(trial.to_bytes(2, "big")).digest()
-            selected, report = s.sample(rows, s.parse_spec(spec), seed)
-            self.assertEqual(ids(selected), brute_force(spec, rows, seed), (spec, rows))
-            self.assertEqual(report["full"], not s.has_shortfall(report))
-            full += report["full"]
-        self.assertTrue(30 < full < 270, full)
+        rng, full, tiered = random.Random(4), 0, 0
+        for trial in range(3000):
+            spec, rows = review_case(rng)
+            seed = hashlib.sha256(b"r2" + trial.to_bytes(4, "big")).digest()
+            want, want_full, want_tier = brute_force(spec, rows, seed)
+            shuffled = rows[:]
+            rng.shuffle(shuffled)
+            selected, report = s.sample(shuffled, s.parse_spec(spec), seed)
+            self.assertEqual((ids(selected), report["full"]), (want, want_full), (trial, spec, rows))
+            self.assertEqual(report["reserve"]["tier_used"] if report["reserve"] else 0, want_tier, trial)
+            self.assertEqual(report["full"], not s.has_shortfall(report), trial)
+            full += want_full
+            tiered += "reserve" in spec
+        self.assertTrue(300 < full < 2700 and tiered > 600, (full, tiered))
 
 
 class TestReviewCases(unittest.TestCase):
@@ -239,6 +286,25 @@ class TestReviewCases(unittest.TestCase):
             ("ax", "ay", "bx", "cx"), key=lambda rid: hashlib.sha256(candidate + rid.encode()).digest()) == "ax")
         selected, report = s.sample(rows, s.parse_spec(spec), seed)
         self.assertEqual((sorted(ids(selected)), report["full"]), (["ay", "bx", "cx"], True))
+
+    def test_infeasible_needs_both_solver_settings(self):
+        """With presolve on, HiGHS answered "infeasible" for the block r0, r5, r3 although r5 fits: r4 was kept in
+        its place. Round 2 of the review, diff1.py."""
+        spec = {"format": s.SPEC_FORMAT, "n": 5, "rows": {"attribute": "s", "quotas": {"S0": 5}},
+                "caps": [{"attribute": "img", "max": 2}, {"attribute": "pkg", "max": 1}],
+                "margins": [{"attribute": "m0", "quotas": {"a": 1, "b": 4}},
+                            {"attribute": "m1", "quotas": {"x": 2, "y": 3, "z": 0}}],
+                "minimums": [{"attribute": "flag", "value": True, "min": 1}], "family": "fam"}
+        rows = [{"id": f"r{i}", "s": "S0", "img": img, "pkg": pkg, "flag": flag, "fam": fam, "m0": m0, "m1": m1}
+                for i, (img, pkg, flag, fam, m0, m1) in enumerate((
+                    ("i0", ["p", "q"], False, "f4", "a", "z"), ("i1", ["q", "r"], False, "f5", "a", "y"),
+                    ("i0", ["r", "p"], False, "f5", "b", "y"), ("i1", ["p", "q"], True, "f0", "a", "z"),
+                    ("i1", ["p"], False, "f3", "b", "y"), ("i0", ["p"], False, "f4", "b", "x"),
+                    ("i2", ["q", "p"], True, "f3", "a", "y")))]
+        seed = bytes.fromhex("2fd797a6fde7688084283eef078fbc4238405ae5671c0e933925078b0634a2f3")
+        selected, report = s.sample(rows, s.parse_spec(spec), seed)
+        self.assertEqual((ids(selected), report["full"]), (["r5", "r1"], False))
+        self.assertEqual(ids(selected), brute_force(spec, rows, seed)[0])
 
 
 class TestNeverExceeds(unittest.TestCase):
@@ -445,6 +511,30 @@ class TestRefusals(unittest.TestCase):
         self.assertEqual([row["id"] for row in rows], ["a", "b"])
 
 
+class TestPins(unittest.TestCase):
+    """The solver runs on the pinned scipy and numpy only."""
+
+    def test_another_version_is_refused(self):
+        real = s.metadata.version
+        for package, version in (("numpy", "2.5.5"), ("scipy", "1.18.0")):
+            def installed(name, package=package, version=version):
+                return version if name == package else real(name)
+            with self.subTest(package=package), mock.patch.object(s.metadata, "version", installed):
+                with self.assertRaisesRegex(Refused, f"{package} {version} is installed"):
+                    s._solver()
+
+    def test_a_missing_package_is_refused(self):
+        real = s.metadata.version
+        for package in ("numpy", "scipy"):
+            def installed(name, package=package):
+                if name == package:
+                    raise s.metadata.PackageNotFoundError(name)
+                return real(name)
+            with self.subTest(package=package), mock.patch.object(s.metadata, "version", installed):
+                with self.assertRaisesRegex(Refused, f"needs {package}=="):
+                    s._solver()
+
+
 class TestSeed(unittest.TestCase):
     def test_the_context_binds_the_frame_the_spec_and_the_sampler(self):
         aggregate, spec, sampler = bytes(range(32)), b'{"n": 1}', bytes(32)
@@ -484,15 +574,24 @@ class TestCli(unittest.TestCase):
         self.beacon = os.path.join(tmp.name, "beacon.json")
         with open(self.beacon, "w", encoding="utf-8") as fh:
             json.dump(drand.fetch(ROUND, get=recorded, now=NOW), fh)
+        self.policy = os.path.join(tmp.name, "policy.json")
+        self.write_policy()
         self.out = os.path.join(tmp.name, "private", "selection.json")
         os.makedirs(os.path.dirname(self.out))
+
+    def write_policy(self, **changes):
+        with open(self.spec, "rb") as fh:
+            policy = s.make_policy("test-draw", ROUND, self.DOMAIN, load_json(self.manifest, "manifest")["aggregate"],
+                                   fh.read())
+        with open(self.policy, "w", encoding="utf-8") as fh:
+            json.dump({**policy, **changes}, fh)
 
     def call(self, *extra, out=None):
         stdout, stderr = io.StringIO(), io.StringIO()
         with redirect_stdout(stdout), redirect_stderr(stderr):
-            code = s.main(["--frame", self.frame, "--frame-path", "frame.jsonl", "--manifest", self.manifest,
-                           "--salts", self.salts, "--spec", self.spec, "--beacon", self.beacon, "--domain", self.DOMAIN,
-                           "--out", out or self.out, *extra])
+            code = s.main(["draw", "--frame", self.frame, "--frame-path", "frame.jsonl", "--manifest", self.manifest,
+                           "--salts", self.salts, "--spec", self.spec, "--policy", self.policy,
+                           "--beacon", self.beacon, "--out", out or self.out, *extra])
         return code, stdout.getvalue(), stderr.getvalue()
 
     def expected_seed(self):
@@ -511,8 +610,11 @@ class TestCli(unittest.TestCase):
         doc = load_json(self.out, "selection")
         with open(self.frame, "rb") as fh:
             self.assertEqual(doc["frame_sha256"], hashlib.sha256(fh.read()).hexdigest())
-        self.assertEqual((doc["seed"], doc["binding"]["beacon_round"], doc["binding"]["sampler"]),
-                         (self.expected_seed().hex(), ROUND, s.revision().hex()))
+        binding = doc["binding"]
+        self.assertEqual((doc["seed"], binding["beacon_round"], binding["sampler"], binding["domain"]),
+                         (self.expected_seed().hex(), ROUND, s.revision().hex(), self.DOMAIN))
+        with open(self.policy, "rb") as fh:
+            self.assertEqual(binding["policy_sha256"], hashlib.sha256(fh.read()).hexdigest())
         self.assertEqual(len(doc["selected"]), 100)
 
     def test_a_seed_the_beacon_does_not_give_is_refused(self):
@@ -520,6 +622,41 @@ class TestCli(unittest.TestCase):
         code, _, err = self.call("--seed", "00" * 32, out=os.path.join(self.tmp, "private", "other.json"))
         self.assertEqual(code, 2)
         self.assertIn("is not the seed", err)
+
+    def test_everything_the_policy_names_must_match(self):
+        for changes, said in (({"round": ROUND + 1}, "round"), ({"frame_aggregate": "0" * 64}, "frame aggregate"),
+                              ({"spec_sha256": "0" * 64}, "spec's SHA-256"), ({"sampler": "0" * 64}, "revision"),
+                              ({"domain": ""}, "domain"), ({"extra": 1}, "draw policy")):
+            self.write_policy(**changes)
+            with self.subTest(changes=changes):
+                code, _, err = self.call()
+                self.assertEqual(code, 2)
+                self.assertIn(said, err)
+
+    def test_the_domain_comes_from_the_policy(self):
+        self.write_policy(domain="vens-kpi/1.0/another-draw")
+        self.assertEqual(self.call()[0], 0)
+        self.assertNotEqual(load_json(self.out, "selection")["seed"], self.expected_seed().hex())
+
+    def test_a_policy_names_a_round_still_to_come(self):
+        def policy(round_number, out):
+            stdout, stderr = io.StringIO(), io.StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = s.main(["policy", "--draw", "sealed-test", "--round", str(round_number), "--domain", self.DOMAIN,
+                               "--manifest", self.manifest, "--spec", self.spec, "--out", out])
+            return code, stderr.getvalue()
+        code, err = policy(ROUND, os.path.join(self.tmp, "past.json"))
+        self.assertEqual(code, 2)
+        self.assertIn("still to come", err)
+        future = drand.first_round_from("2099-01-01T00:00:00Z")
+        written = os.path.join(self.tmp, "future.json")
+        self.assertEqual(policy(future, written)[0], 0)
+        doc = load_json(written, "policy")
+        with open(self.spec, "rb") as fh:
+            spec_sha256 = hashlib.sha256(fh.read()).hexdigest()
+        self.assertEqual((doc["round"], doc["domain"], doc["sampler"], doc["spec_sha256"], doc["frame_aggregate"]),
+                         (future, self.DOMAIN, s.revision().hex(), spec_sha256,
+                          load_json(self.manifest, "manifest")["aggregate"]))
 
     def test_a_frame_that_is_not_the_committed_one_is_refused(self):
         with open(self.frame, "a", encoding="utf-8") as fh:

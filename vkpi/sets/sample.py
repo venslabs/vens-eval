@@ -17,20 +17,27 @@ The rule, fixed before any data exists:
    toward the minimums, each counted up to its minimum; then rank, by the walk. A row past its margin quota is the
    refill: it comes from its own stratum and never takes a stratum past its quota. Every shortfall is reported.
 6. Exactness. Each check is one integer program over every constraint at once, solved by HiGHS through
-   scipy.optimize.milp (scipy 1.18.1, no gap, no time limit). Every selection the solver returns is checked again in
-   exact integer arithmetic before use, and the run stops if one fails; an infeasibility answer is the solver's.
+   scipy.optimize.milp (scipy 1.18.1, numpy 2.5.4, no gap, no time limit), with presolve off and, only when that
+   says infeasible, again with presolve on: "infeasible" needs both. Every selection either run returns is checked
+   again in exact integer arithmetic before use, and the run stops if one fails.
 
-    python3 -m vkpi.sets.sample --frame FRAME.jsonl --frame-path PATH --manifest PUBLIC.json --salts PRIVATE.json \\
-        --spec QUOTAS.json --beacon BEACON.json --domain DOMAIN --out SELECTION.json
+    python3 -m vkpi.sets.sample policy --draw NAME --round ROUND --domain DOMAIN --manifest PUBLIC.json \\
+        --spec QUOTAS.json --out POLICY.json
+    python3 -m vkpi.sets.sample draw --frame FRAME.jsonl --frame-path PATH --manifest PUBLIC.json \\
+        --salts PRIVATE.json --spec QUOTAS.json --policy POLICY.json --beacon BEACON.json --out SELECTION.json
 
-The seed is recomputed from the verified beacon: SHA-256(domain || randomness || context), the context binding the
-committed frame's aggregate, the spec's bytes and this sampler's revision (`context_hash`).
+The draw policy, published before its round, names the round, the domain, the frame's aggregate, the spec's SHA-256
+and the sampler's revision; `draw` refuses any of them that differs. The seed is recomputed from the verified beacon:
+SHA-256(domain || randomness || context), the context binding the frame's aggregate, the spec's bytes and the
+sampler's revision (`context_hash`).
 """
 import argparse
 import hashlib
 import json
 import os
+import re
 import sys
+import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from importlib import metadata
@@ -43,10 +50,15 @@ from vkpi.sets.common import (Refused, decode, framed, from_hex, load_json, pars
 SPEC_FORMAT = "vens-kpi/1.0/quotas"
 SELECTION_FORMAT = "vens-kpi/1.0/selection"
 SCIPY_VERSION = "1.18.1"
+NUMPY_VERSION = "2.5.4"
 CONTEXT_TAG = b"vens-kpi/1.0/sets/sample-context"
 REVISION_TAG = b"vens-kpi/1.0/sets/sampler"
+POLICY_FORMAT = "vens-kpi/1.0/draw-policy"
 STAGES = ("quota", "refill")
 _SPEC_KEYS = {"caps", "family", "format", "margins", "minimums", "n", "reserve", "rows"}
+_POLICY_KEYS = {"domain", "draw", "format", "frame_aggregate", "round", "sampler", "spec_sha256"}
+_DRAW_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
+_DIGEST = re.compile(r"[0-9a-f]{64}")
 _MISSING = object()
 
 
@@ -215,14 +227,19 @@ def _row(doc, spec, seed, where):
     return _Row(rid, hashlib.sha256(seed + encoded).digest(), stratum, cells, caps, marks, family, tier)
 
 
-def _solver():
-    """scipy's MILP interface, once the installed scipy is the pinned one."""
+def _pinned(package, version):
     try:
-        installed = metadata.version("scipy")
+        installed = metadata.version(package)
     except metadata.PackageNotFoundError as e:
-        raise Refused(f"the sampler needs scipy=={SCIPY_VERSION} (pip install -e .)") from e
-    if installed != SCIPY_VERSION:
-        raise Refused(f"scipy {installed} is installed; the sampler runs on scipy {SCIPY_VERSION} only")
+        raise Refused(f"the sampler needs {package}=={version} (pip install -e .)") from e
+    if installed != version:
+        raise Refused(f"{package} {installed} is installed; the sampler runs on {package} {version} only")
+
+
+def _solver():
+    """scipy's MILP interface, once the installed scipy and numpy are the pinned ones."""
+    _pinned("scipy", SCIPY_VERSION)
+    _pinned("numpy", NUMPY_VERSION)
     import numpy
     from scipy.optimize import Bounds, LinearConstraint, milp
     from scipy.sparse import csr_array
@@ -314,7 +331,11 @@ class _Program:
     def solve(self, part, total, within=0, toward=0, kept=(), passed=(), some=()):
         """The rows of a selection holding every limit and n, with a row count in `total` (low, high), at least
         `within` rows within margin quotas and `toward` toward the minimums, keeping `kept`, leaving `passed` and
-        holding at least one row of `some` when given; None when there is none. `part` names the objective."""
+        holding at least one row of `some` when given; None when there is none. `part` names the objective.
+
+        HiGHS's presolve once answered "infeasible" for a feasible program (1 frame in 12,300, PR #6 review), so the
+        program is solved with presolve off, and again with it on only when that says infeasible: None needs both. A
+        selection either run returns is checked in exact integers, so a feasible answer stands on its own."""
         np = self.lib.np
         lower, upper = self.lower.copy(), self.upper.copy()
         lower[self.total_row], upper[self.total_row] = total
@@ -326,9 +347,13 @@ class _Program:
             row = np.zeros(self.width)
             row[list(some)] = 1
             constraints.append(self.lib.LinearConstraint(row.reshape(1, -1), 1, np.inf))
-        result = self.lib.milp(self._weights(part), integrality=self.integrality, bounds=self.lib.Bounds(low, high),
-                               constraints=constraints, options={"mip_rel_gap": 0, "presolve": True})
-        if result.status == 2:
+        for presolve in (False, True):
+            result = self.lib.milp(self._weights(part), integrality=self.integrality,
+                                   bounds=self.lib.Bounds(low, high), constraints=constraints,
+                                   options={"mip_rel_gap": 0, "presolve": presolve})
+            if result.status != 2:
+                break
+        else:
             return None
         if result.status != 0:
             raise Refused(f"the solver gave no answer ({result.message}): the run stops")
@@ -603,63 +628,124 @@ def summary(report):
     return lines
 
 
-def _seed(args, frame_bytes, spec_bytes):
-    """The draw's seed, recomputed from the verified beacon record, and what it binds. The frame must be the file
-    the manifest commits under --frame-path."""
+def check_policy(policy):
+    """A draw policy, checked: the draw's name, its round, its domain, and the three SHA-256 values it fixes."""
+    if not isinstance(policy, dict) or set(policy) != _POLICY_KEYS or policy["format"] != POLICY_FORMAT:
+        raise Refused(f"a draw policy is an object of format {POLICY_FORMAT}, with exactly "
+                      f"{', '.join(sorted(_POLICY_KEYS))}")
+    if not isinstance(policy["draw"], str) or not _DRAW_NAME.fullmatch(policy["draw"]):
+        raise Refused("draw: a name of ASCII letters, digits and . _ -, at most 100 characters")
+    drand.check_round(policy["round"])
+    domain = policy["domain"]
+    if not isinstance(domain, str) or not domain or not domain.isascii() or not domain.isprintable():
+        raise Refused("domain: a non-empty printable ASCII string")
+    for key in ("frame_aggregate", "sampler", "spec_sha256"):
+        if not isinstance(policy[key], str) or not _DIGEST.fullmatch(policy[key]):
+            raise Refused(f"{key}: 64 lowercase hex characters")
+    return policy
+
+
+def make_policy(draw, round_number, domain, frame_aggregate, spec_bytes):
+    """The policy of one draw, to publish before its round: the round, the domain, and what the seed binds."""
+    return check_policy({"domain": domain, "draw": draw, "format": POLICY_FORMAT, "frame_aggregate": frame_aggregate,
+                         "round": round_number, "sampler": revision().hex(),
+                         "spec_sha256": hashlib.sha256(spec_bytes).hexdigest()})
+
+
+def _bind(args, frame_bytes, spec_bytes, policy_bytes):
+    """The draw's seed, recomputed from the verified beacon record under the draw policy, and what it binds. The
+    frame must be the file the manifest commits under --frame-path."""
+    policy = check_policy(parse_json(decode(policy_bytes, f"policy {args.policy}"), f"policy {args.policy}"))
     manifest = load_json(args.manifest, "manifest")
     salts = commit.check_salts(load_json(args.salts, "salts file"), manifest)
     if args.frame_path not in salts:
-        raise Refused(f"{args.frame_path}: no salt for it in the salts file")
+        raise Refused(f"{commit.shown(args.frame_path)}: no salt for it in the salts file")
     if not commit.verify_file(manifest, args.frame_path, salts[args.frame_path], frame_bytes):
-        raise Refused(f"{args.frame}: not the file the manifest commits as {args.frame_path}")
+        raise Refused(f"{commit.shown(args.frame)}: not the file the manifest commits as "
+                      f"{commit.shown(args.frame_path)}")
     record = drand.verify_record(load_json(args.beacon, "beacon"))
     sampler = revision()
+    for what, got, named in (("round", record["round"], policy["round"]),
+                             ("frame aggregate", manifest["aggregate"], policy["frame_aggregate"]),
+                             ("spec's SHA-256", hashlib.sha256(spec_bytes).hexdigest(), policy["spec_sha256"]),
+                             ("sampler revision", sampler.hex(), policy["sampler"])):
+        if got != named:
+            raise Refused(f"the {what} is not the one the draw policy names")
     context = context_hash(bytes.fromhex(manifest["aggregate"]), spec_bytes, sampler)
-    seed = drand.derive_seed(args.domain, bytes.fromhex(record["randomness"]), context)
+    seed = drand.derive_seed(policy["domain"], bytes.fromhex(record["randomness"]), context)
     if args.seed is not None and from_hex(args.seed, 32, "--seed") != seed:
-        raise Refused("--seed is not the seed the beacon, the domain and the context give")
-    binding = {"beacon_round": record["round"], "context": context.hex(), "domain": args.domain,
-               "frame_aggregate": manifest["aggregate"], "frame_path": args.frame_path,
-               "randomness": record["randomness"], "sampler": sampler.hex(),
-               "spec_sha256": hashlib.sha256(spec_bytes).hexdigest()}
+        raise Refused("--seed is not the seed the beacon and the draw policy give")
+    binding = {"beacon_round": record["round"], "context": context.hex(), "domain": policy["domain"],
+               "draw": policy["draw"], "frame_aggregate": manifest["aggregate"], "frame_path": args.frame_path,
+               "policy_sha256": hashlib.sha256(policy_bytes).hexdigest(), "randomness": record["randomness"],
+               "sampler": sampler.hex(), "spec_sha256": policy["spec_sha256"]}
     return seed, binding
+
+
+def _cmd_policy(args):
+    due = drand.time_of_round(drand.check_round(args.round))
+    if due <= time.time():
+        raise Refused(f"round {args.round} was emitted at {drand.utc(due)}: a policy names a round still to come")
+    manifest = load_json(args.manifest, "manifest")
+    commit.check_manifest(manifest)
+    spec_bytes = read_bytes(args.spec, "spec")
+    parse_spec(parse_json(decode(spec_bytes, f"spec {args.spec}"), f"spec {args.spec}"))
+    data = pretty_json(make_policy(args.draw, args.round, args.domain, manifest["aggregate"], spec_bytes))
+    write_new(args.out, data)
+    print(f"draw policy {args.out}, SHA-256 {hashlib.sha256(data).hexdigest()}")
+    print(f"publish it before round {args.round}, emitted at {drand.utc(due)}")
+    return 0
+
+
+def _cmd_draw(args):
+    require_private(args.out, "the selection")
+    if os.path.lexists(args.out):
+        raise Refused(f"{args.out} exists already: nothing is overwritten")
+    frame_bytes, spec_bytes, policy_bytes = (read_bytes(path, what) for path, what in
+                                             ((args.frame, "frame"), (args.spec, "spec"), (args.policy, "policy")))
+    seed, binding = _bind(args, frame_bytes, spec_bytes, policy_bytes)
+    spec = parse_spec(parse_json(decode(spec_bytes, f"spec {args.spec}"), f"spec {args.spec}"))
+    selected, report = sample(parse_frame(frame_bytes, f"frame {args.frame}"), spec, seed)
+    document = {"binding": binding, "format": SELECTION_FORMAT, "report": report, "seed": seed.hex(),
+                "frame_sha256": hashlib.sha256(frame_bytes).hexdigest(), "selected": selected}
+    write_new(args.out, pretty_json(document), private=True)
+    for line in summary(report):
+        print(line)
+    print(f"seed {seed.hex()} from round {binding['beacon_round']}; sampler revision {binding['sampler']}")
+    return 0
 
 
 def _parser():
     parser = argparse.ArgumentParser(prog="python3 -m vkpi.sets.sample",
                                      description="A deterministic stratified sample of a committed frame.")
-    parser.add_argument("--frame", required=True, help="JSONL, one object per line: an id and the spec's attributes")
-    parser.add_argument("--frame-path", required=True, help="the frame's path in the commitment manifest")
-    parser.add_argument("--manifest", required=True, help="the public manifest that commits the frame")
-    parser.add_argument("--salts", required=True, help="that commitment's private salts")
-    parser.add_argument("--spec", required=True, help=f"the quotas, format {SPEC_FORMAT}")
-    parser.add_argument("--beacon", required=True, help="the drand beacon record, from `drand fetch`")
-    parser.add_argument("--domain", required=True, help="the draw's domain string, as F0 freezes it")
-    parser.add_argument("--seed", help="the seed expected, in hex; refused unless the beacon gives it")
-    parser.add_argument("--out", required=True, help="the selection to write, outside every git working tree")
+    sub = parser.add_subparsers(dest="command", required=True)
+    cmd = sub.add_parser("policy", help="write a draw policy, to publish before its round")
+    cmd.add_argument("--draw", required=True, help="the draw's name, such as sealed-v0.7.0")
+    cmd.add_argument("--round", required=True, type=int, help="the quicknet round, still to come")
+    cmd.add_argument("--domain", required=True, help="the draw's domain string")
+    cmd.add_argument("--manifest", required=True, help="the public manifest that commits the frame")
+    cmd.add_argument("--spec", required=True, help=f"the quotas, format {SPEC_FORMAT}")
+    cmd.add_argument("--out", required=True, help="the policy to write")
+    cmd = sub.add_parser("draw", help="draw the sample under a published draw policy")
+    cmd.add_argument("--frame", required=True, help="JSONL, one object per line: an id and the spec's attributes")
+    cmd.add_argument("--frame-path", required=True, help="the frame's path in the commitment manifest")
+    cmd.add_argument("--manifest", required=True, help="the public manifest that commits the frame")
+    cmd.add_argument("--salts", required=True, help="that commitment's private salts")
+    cmd.add_argument("--spec", required=True, help=f"the quotas, format {SPEC_FORMAT}")
+    cmd.add_argument("--policy", required=True, help="the draw policy, published before the round")
+    cmd.add_argument("--beacon", required=True, help="the drand beacon record of the policy's round")
+    cmd.add_argument("--seed", help="the seed expected, in hex; refused unless the beacon and the policy give it")
+    cmd.add_argument("--out", required=True, help="the selection to write, outside every git working tree")
     return parser
 
 
 def main(argv=None):
     args = _parser().parse_args(argv)
     try:
-        require_private(args.out, "the selection")
-        if os.path.lexists(args.out):
-            raise Refused(f"{args.out} exists already: nothing is overwritten")
-        frame_bytes, spec_bytes = read_bytes(args.frame, "frame"), read_bytes(args.spec, "spec")
-        seed, binding = _seed(args, frame_bytes, spec_bytes)
-        spec = parse_spec(parse_json(decode(spec_bytes, f"spec {args.spec}"), f"spec {args.spec}"))
-        selected, report = sample(parse_frame(frame_bytes, f"frame {args.frame}"), spec, seed)
-        document = {"binding": binding, "format": SELECTION_FORMAT, "report": report, "seed": seed.hex(),
-                    "frame_sha256": hashlib.sha256(frame_bytes).hexdigest(), "selected": selected}
-        write_new(args.out, pretty_json(document), private=True)
+        return {"policy": _cmd_policy, "draw": _cmd_draw}[args.command](args)
     except Refused as e:
         print(f"refused: {e}", file=sys.stderr)
         return 2
-    for line in summary(report):
-        print(line)
-    print(f"seed {seed.hex()} from round {binding['beacon_round']}; sampler revision {binding['sampler']}")
-    return 0
 
 
 if __name__ == "__main__":

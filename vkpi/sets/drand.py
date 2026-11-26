@@ -201,16 +201,17 @@ def _is_address(host):
 
 
 def check_relays(relays):
-    """Https origins named by hostname, of at least two operators. An operator is read from the hostname's last two
-    labels (drand.sh, cloudflare.com): a heuristic, which is why the signature check, not this, is what counts."""
+    """Https origins named by hostname, without a trailing dot, of at least two operators. An operator is read from
+    the hostname's last two labels (drand.sh, cloudflare.com): a heuristic, which is why the signature check, not
+    this, is what counts."""
     relays = tuple(relays)
     operators = set()
     for relay in relays:
         url = urllib.parse.urlsplit(relay)
-        if (url.scheme != "https" or not url.hostname or "@" in url.netloc or url.path not in ("", "/")
-                or url.query or url.fragment or _is_address(url.hostname)):
+        if (url.scheme != "https" or not url.hostname or url.hostname.endswith(".") or "@" in url.netloc
+                or url.path not in ("", "/") or url.query or url.fragment or _is_address(url.hostname)):
             raise Refused(f"{relay}: a relay is an https origin named by its hostname, such as {RELAYS[0]}")
-        operators.add(".".join(url.hostname.rstrip(".").lower().split(".")[-2:]))
+        operators.add(".".join(url.hostname.lower().split(".")[-2:]))
     if len(operators) < 2:
         raise Refused("give relays of at least two operators, such as " + " and ".join(RELAYS))
     return tuple(relay.rstrip("/") for relay in relays)
