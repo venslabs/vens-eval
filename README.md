@@ -36,7 +36,7 @@ A campaign is read in stages (spec §3), and every verdict carries its stage: "v
 
 - **validated without waiver**: every blocking line measured at P2 (frozen protocol, fresh answers, same window, read by the frozen reader) and SATISFIED or PROGRESS ESTABLISHED.
 - **shipped under waivers**: the maintainer signs the delivery; each FAILED covered by a waiver sheet, each UNDETERMINED and NOT MEASURED shown and accepted by name, nothing that cannot be waived.
-- **inconclusive**: the evidence does not allow the conclusion sought, and no signed delivery accepts the open lines.
+- **inconclusive**: none of the other three verdicts applies, including when P2 evidence is insufficient.
 - **requirements not met**: a failure without a waiver sheet, or one that cannot be waived.
 
 ## What comes next
