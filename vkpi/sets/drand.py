@@ -210,7 +210,7 @@ def check_relays(relays):
         if (url.scheme != "https" or not url.hostname or "@" in url.netloc or url.path not in ("", "/")
                 or url.query or url.fragment or _is_address(url.hostname)):
             raise Refused(f"{relay}: a relay is an https origin named by its hostname, such as {RELAYS[0]}")
-        operators.add(".".join(url.hostname.split(".")[-2:]))
+        operators.add(".".join(url.hostname.rstrip(".").lower().split(".")[-2:]))
     if len(operators) < 2:
         raise Refused("give relays of at least two operators, such as " + " and ".join(RELAYS))
     return tuple(relay.rstrip("/") for relay in relays)

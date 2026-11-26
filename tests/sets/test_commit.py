@@ -70,7 +70,8 @@ class TestFraming(unittest.TestCase):
     def test_paths_the_public_manifest_cannot_carry(self):
         for bad in ("", "/abs.json", "a//b", "../x", "./x", ".hidden", "a/.DS_Store", "a\\b", "é.json",
                     "cases/CVE-2099-0001.json", "x/GHSA-abcd-efgh-ijkl/a.json", "TEMP-0290435-0B57B5.json",
-                    "CVE_2099_44228.json", "cve2099-44228.json", "CVE-2099/44228/a.json", "GHSA_abcd_efgh_ijkl.json"):
+                    "CVE_2099_44228.json", "cve2099-44228.json", "CVE-2099/44228/a.json", "GHSA_abcd_efgh_ijkl.json",
+                    "CVE+2099+0001.json", "CVE--2099-0001.json", "CVE-2099+0001"):
             with self.subTest(path=bad), self.assertRaises(Refused):
                 c.check_path(bad)
         self.assertEqual(c.check_path("dir/pair-01/b+c_d.json"), "dir/pair-01/b+c_d.json")

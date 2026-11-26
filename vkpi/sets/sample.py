@@ -1,47 +1,51 @@
-"""A deterministic stratified sample: the frame rows a seed selects under exact margins, caps and minimums.
+"""A deterministic stratified sample: the frame rows a seed selects under exact strata and margins, caps, minimums
+and families.
 
 The rule, fixed before any data exists:
 
-1. Order. A row's rank is SHA-256(seed || id), the id in UTF-8; rows are read by increasing rank, ties broken by id.
-   The frame's line order plays no part.
-2. One per family. With a family key, each family keeps its lowest-rank row among the tiers in use, before any
-   quota applies.
+1. Order. A row's rank is SHA-256(seed || id), the id in UTF-8. Rows are read by increasing rank; the frame's line
+   order plays no part.
+2. A full selection has exactly n rows, every stratum and every margin value at its quota, every minimum met, no cap
+   exceeded (a list value counts toward each of its values) and at most one row per family.
 3. Reserve. With a reserve attribute (0 for the main frame, then 1, 2, ... for the listed reserve, in its order), the
-   sample is drawn from tiers 0 to k for the smallest k at which nothing is short: no stratum, no minimum and no
-   margin value, refilled or not. Otherwise it is drawn from every tier.
-4. Greedy. Two passes over the order; a row is taken only if
-     - it exceeds no quota: its stratum's (`rows`), each margin's, each cap and the total n; and
-     - it keeps the strata and every margin reachable: the most rows the remaining stratum quotas can still take
-       from the selectable rows, and for each margin the most rows the remaining stratum and margin quotas can still
-       take (a max-flow from strata to margin values), each drop by exactly one. A cap the row fills withdraws the
-       rest of that cap's rows first, so a row that would starve a stratum through a cap waits.
-   The "minimum" pass takes the minimums one at a time, the scarcest first (fewest matching rows, ties in the spec's
-   order), each with the rows that count toward it until it is met; the "quota" pass then takes any row. With one
-   margin and no cap reached, the greedy fills every stratum and margin quota the frame can fill.
-5. Refill. The rows a stratum still lacks are taken in order from that same stratum: first rows that fit every
-   margin, then any row, the margins no longer binding. Caps still hold, no stratum is exceeded and nothing is
-   invented: a stratum the frame cannot fill stays short.
-6. Report. Each stratum and minimum is met or short; each margin value met, short, or over by refill; each margin
-   met, refilled (its whole shortfall taken from the same strata) or short; each cap held.
+   pool is tiers 0 to k for the smallest k at which a full selection exists; otherwise every tier.
+4. Walk. Rows are read in rank order, and a row is kept if and only if the rows kept so far, this one included, can
+   still be completed into the best selection the pool allows, from rows not yet read. When a full selection exists,
+   that best is a full selection, and the walk returns the first one in rank order.
+5. Best selection when no full selection exists: the most rows, no stratum, cap, family or n exceeded and margin
+   values allowed past their quota; among those, the most rows within their margin quotas; among those, the most rows
+   toward the minimums, each counted up to its minimum; then rank, by the walk. A row past its margin quota is the
+   refill: it comes from its own stratum and never takes a stratum past its quota. Every shortfall is reported.
+6. Exactness. Each check is one integer program over every constraint at once, solved by HiGHS through
+   scipy.optimize.milp (scipy 1.18.1, no gap, no time limit). Every selection the solver returns is checked again in
+   exact integer arithmetic before use, and the run stops if one fails; an infeasibility answer is the solver's.
 
-Precedence, highest first: caps and families, strata, margins, minimums.
+    python3 -m vkpi.sets.sample --frame FRAME.jsonl --frame-path PATH --manifest PUBLIC.json --salts PRIVATE.json \\
+        --spec QUOTAS.json --beacon BEACON.json --domain DOMAIN --out SELECTION.json
 
-    python3 -m vkpi.sets.sample --frame FRAME.jsonl --spec QUOTAS.json --seed HEX --out SELECTION.json
+The seed is recomputed from the verified beacon: SHA-256(domain || randomness || context), the context binding the
+committed frame's aggregate, the spec's bytes and this sampler's revision (`context_hash`).
 """
 import argparse
 import hashlib
 import json
 import os
 import sys
-from collections import Counter, defaultdict, deque
+from collections import Counter, defaultdict
 from dataclasses import dataclass
+from importlib import metadata
+from types import SimpleNamespace
 
-from vkpi.sets.common import (Refused, from_hex, load_json, parse_json, pretty_json, require_private, sha256_file,
-                              write_new)
+from vkpi.sets import commit, drand
+from vkpi.sets.common import (Refused, decode, framed, from_hex, load_json, parse_json, pretty_json, read_bytes,
+                              require_private, write_new)
 
 SPEC_FORMAT = "vens-kpi/1.0/quotas"
 SELECTION_FORMAT = "vens-kpi/1.0/selection"
-STAGES = ("minimum", "quota", "refill")
+SCIPY_VERSION = "1.18.1"
+CONTEXT_TAG = b"vens-kpi/1.0/sets/sample-context"
+REVISION_TAG = b"vens-kpi/1.0/sets/sampler"
+STAGES = ("quota", "refill")
 _SPEC_KEYS = {"caps", "family", "format", "margins", "minimums", "n", "reserve", "rows"}
 _MISSING = object()
 
@@ -163,23 +167,22 @@ def parse_spec(doc):
 def _value(doc, attribute, where):
     value = doc.get(attribute, _MISSING)
     if value is _MISSING:
-        raise Refused(f"{where}: no {attribute!r}, and nothing is invented")
+        raise Refused(f"{where}: field {attribute!r} missing, and nothing is invented")
     return value
 
 
 def _cell(doc, margin, where):
-    value = _value(doc, margin.attribute, where)
-    if not isinstance(value, str) or value not in margin.quotas:
-        raise Refused(f"{where}: {margin.attribute} = {value!r} has no quota; the quotas name "
-                      f"{', '.join(margin.quotas)}")
-    return value
+    if not isinstance(_value(doc, margin.attribute, where), str) or doc[margin.attribute] not in margin.quotas:
+        raise Refused(f"{where}: field {margin.attribute!r} holds a value with no quota")
+    return doc[margin.attribute]
 
 
 def _cap_keys(doc, index, cap, where):
     value = _value(doc, cap.attribute, where)
     values = value if isinstance(value, list) else [value]
     if not values or not all(_scalar(v) for v in values):
-        raise Refused(f"{where}: {cap.attribute} is a string, an integer, a boolean or a non-empty list of them")
+        raise Refused(f"{where}: field {cap.attribute!r} is not a string, an integer, a boolean or a non-empty list "
+                      "of them")
     return {(index, type(v).__name__, v) for v in values}
 
 
@@ -188,78 +191,277 @@ def _same(a, b):
 
 
 def _row(doc, spec, seed, where):
-    """One frame row, parsed. A refusal names the row by `where`, its position in the frame, never by its id, which
-    is sealed."""
+    """One frame row, parsed. A refusal names the row by `where`, its position in the frame, and the field, never a
+    value: the frame is sealed."""
     if not isinstance(doc, dict):
         raise Refused(f"{where}: not an object")
     rid = doc.get("id")
     if not isinstance(rid, str) or not rid:
-        raise Refused(f"{where}: no id")
+        raise Refused(f"{where}: field 'id' missing or not a string")
+    try:
+        encoded = rid.encode("utf-8")
+    except UnicodeEncodeError as e:
+        raise Refused(f"{where}: the id is not valid UTF-8") from e
     stratum = _cell(doc, spec.rows, where) if spec.rows else ""
-    cells = tuple(_cell(doc, m, where) for m in spec.margins) if spec.margins else ("",)
+    cells = tuple(_cell(doc, m, where) for m in spec.margins)
     caps = tuple(sorted(set().union(*(_cap_keys(doc, i, cap, where) for i, cap in enumerate(spec.caps)))))
     marks = tuple(_same(_value(doc, m.attribute, where), m.value) for m in spec.minimums)
     family = _value(doc, spec.family, where) if spec.family else None
     if spec.family and (not isinstance(family, str) or not family):
-        raise Refused(f"{where}: {spec.family} is a non-empty string")
+        raise Refused(f"{where}: field {spec.family!r} is not a non-empty string")
     tier = _value(doc, spec.reserve, where) if spec.reserve else 0
     if isinstance(tier, bool) or not isinstance(tier, int) or tier < 0:
-        raise Refused(f"{where}: {spec.reserve} is an integer of at least 0")
-    rank = hashlib.sha256(seed + rid.encode("utf-8")).digest()
-    return _Row(rid, rank, stratum, cells, caps, marks, family, tier)
+        raise Refused(f"{where}: field {spec.reserve!r} is not an integer of at least 0")
+    return _Row(rid, hashlib.sha256(seed + encoded).digest(), stratum, cells, caps, marks, family, tier)
 
 
-def max_flow(supply, demand, capacity):
-    """The most rows the remaining quotas can take: a flow from strata (`supply`) to margin values (`demand`) through
-    `capacity[(stratum, value)]`, the selectable rows of each pair."""
-    graph = defaultdict(dict)
-
-    def link(a, b, amount):
-        graph[a][b] = graph[a].get(b, 0) + amount
-        graph[b].setdefault(a, 0)
-
-    for stratum, amount in supply.items():
-        link("source", ("stratum", stratum), amount)
-    for value, amount in demand.items():
-        link(("value", value), "sink", amount)
-    for (stratum, value), amount in capacity.items():
-        if amount > 0 and stratum in supply and value in demand:
-            link(("stratum", stratum), ("value", value), amount)
-    total = 0
-    while (path := _augmenting_path(graph)) is not None:
-        push = min(graph[a][b] for a, b in path)
-        for a, b in path:
-            graph[a][b] -= push
-            graph[b][a] += push
-        total += push
-    return total
+def _solver():
+    """scipy's MILP interface, once the installed scipy is the pinned one."""
+    try:
+        installed = metadata.version("scipy")
+    except metadata.PackageNotFoundError as e:
+        raise Refused(f"the sampler needs scipy=={SCIPY_VERSION} (pip install -e .)") from e
+    if installed != SCIPY_VERSION:
+        raise Refused(f"scipy {installed} is installed; the sampler runs on scipy {SCIPY_VERSION} only")
+    import numpy
+    from scipy.optimize import Bounds, LinearConstraint, milp
+    from scipy.sparse import csr_array
+    return SimpleNamespace(np=numpy, Bounds=Bounds, LinearConstraint=LinearConstraint, milp=milp, csr_array=csr_array)
 
 
-def _augmenting_path(graph):
-    parent = {"source": None}
-    queue = deque(["source"])
-    while queue:
-        node = queue.popleft()
-        for nxt, room in graph[node].items():
-            if room > 0 and nxt not in parent:
-                parent[nxt] = node
-                queue.append(nxt)
-    if "sink" not in parent:
-        return None
-    path, node = [], "sink"
-    while parent[node] is not None:
-        path.append((parent[node], node))
-        node = parent[node]
-    return path
+def _groups(spec, pool):
+    """The limits (each stratum, cap value and family of two rows or more, with its bound), then the rows of each
+    margin value and of each minimum, as positions in the pool."""
+    strata, caps, families, cells = defaultdict(list), defaultdict(list), defaultdict(list), defaultdict(list)
+    marks = [[] for _ in spec.minimums]
+    for i, row in enumerate(pool):
+        strata[row.stratum].append(i)
+        for key in row.caps:
+            caps[key].append(i)
+        if spec.family:
+            families[row.family].append(i)
+        for m, value in enumerate(row.cells):
+            cells[(m, value)].append(i)
+        for k, mark in enumerate(row.marks):
+            if mark:
+                marks[k].append(i)
+    quotas = spec.rows.quotas if spec.rows else {"": spec.n}
+    limits = [(quota, strata[value]) for value, quota in quotas.items()]
+    limits += [(spec.caps[key[0]].max, members) for key, members in caps.items()]
+    limits += [(1, members) for members in families.values() if len(members) > 1]
+    return limits, cells, marks
 
 
-def _left(quotas, counts, extra=None):
-    """The quotas still open, one fewer for the value `extra` takes."""
-    out = {}
-    for value, quota in quotas.items():
-        left = quota - counts[value] - (value == extra)
-        if left > 0:
-            out[value] = left
+class _Program:
+    """The integer program of one pool in rank order: a 0/1 variable per row, then one per margin value (its kept
+    rows, up to the quota) and one per minimum (its kept rows, up to the minimum)."""
+
+    def __init__(self, spec, pool):
+        self.lib, self.spec, self.pool = _solver(), spec, pool
+        self.cells = [(m, value) for m, margin in enumerate(spec.margins) for value in margin.quotas]
+        self.limits, self.cell_rows, self.mark_rows = _groups(spec, pool)
+        self.limits_of, self.cells_of = [[] for _ in pool], [[] for _ in pool]
+        for index, (_, members) in enumerate(self.limits):
+            for i in members:
+                self.limits_of[i].append(index)
+        for j, cell in enumerate(self.cells):
+            for i in self.cell_rows[cell]:
+                self.cells_of[i].append(j)
+        self._build()
+
+    def _build(self):
+        np, spec, size = self.lib.np, self.spec, len(self.pool)
+        first_cell, first_mark = size, size + len(self.cells)
+        self.width = first_mark + len(spec.minimums)
+        entries, lower, upper = [], [], []
+
+        def add(columns, low, high):
+            entries.extend((len(lower), column, coefficient) for column, coefficient in columns)
+            lower.append(low)
+            upper.append(high)
+            return len(lower) - 1
+
+        self.total_row = add([(i, 1) for i in range(size)], 0, spec.n)
+        for bound, members in self.limits:
+            add([(i, 1) for i in members], 0, bound)
+        for j, cell in enumerate(self.cells):
+            add([(first_cell + j, 1)] + [(i, -1) for i in self.cell_rows[cell]], -np.inf, 0)
+        for k, members in enumerate(self.mark_rows):
+            add([(first_mark + k, 1)] + [(i, -1) for i in members], -np.inf, 0)
+        self.margin_row = add([(first_cell + j, 1) for j in range(len(self.cells))], -np.inf, np.inf)
+        self.minimum_row = add([(first_mark + k, 1) for k in range(len(spec.minimums))], -np.inf, np.inf)
+        rows, columns, values = (list(part) for part in zip(*entries))
+        self.matrix = self.lib.csr_array((values, (rows, columns)), shape=(len(lower), self.width))
+        self.lower, self.upper = np.array(lower, dtype=float), np.array(upper, dtype=float)
+        quotas = [spec.margins[m].quotas[value] for m, value in self.cells]
+        self.high = np.array([1] * size + quotas + [m.min for m in spec.minimums], dtype=float)
+        self.integrality = np.array([1] * size + [0] * (self.width - size))
+
+    def _weights(self, part):
+        """Minimised: minus the rows, minus the margin variables, minus the minimum variables, the rank, or nothing."""
+        np, size = self.lib.np, len(self.pool)
+        weights = np.zeros(self.width)
+        if part == "rows":
+            weights[:size] = -1
+        elif part == "margins":
+            weights[size:size + len(self.cells)] = -1
+        elif part == "minimums":
+            weights[size + len(self.cells):] = -1
+        elif part == "rank":
+            weights[:size] = np.arange(size)
+        return weights
+
+    def solve(self, part, total, within=0, toward=0, kept=(), passed=(), some=()):
+        """The rows of a selection holding every limit and n, with a row count in `total` (low, high), at least
+        `within` rows within margin quotas and `toward` toward the minimums, keeping `kept`, leaving `passed` and
+        holding at least one row of `some` when given; None when there is none. `part` names the objective."""
+        np = self.lib.np
+        lower, upper = self.lower.copy(), self.upper.copy()
+        lower[self.total_row], upper[self.total_row] = total
+        lower[self.margin_row], lower[self.minimum_row] = within, toward
+        low, high = np.zeros(self.width), self.high.copy()
+        low[list(kept)], high[list(passed)] = 1, 0
+        constraints = [self.lib.LinearConstraint(self.matrix, lower, upper)]
+        if some:
+            row = np.zeros(self.width)
+            row[list(some)] = 1
+            constraints.append(self.lib.LinearConstraint(row.reshape(1, -1), 1, np.inf))
+        result = self.lib.milp(self._weights(part), integrality=self.integrality, bounds=self.lib.Bounds(low, high),
+                               constraints=constraints, options={"mip_rel_gap": 0, "presolve": True})
+        if result.status == 2:
+            return None
+        if result.status != 0:
+            raise Refused(f"the solver gave no answer ({result.message}): the run stops")
+        chosen = [i for i in range(len(self.pool)) if result.x[i] > 0.5]
+        levels = self.measure(chosen)
+        if (levels is None or not total[0] <= levels[0] <= total[1] or levels[1] < within or levels[2] < toward
+                or not set(kept) <= set(chosen) or set(passed) & set(chosen) or (some and not set(some) & set(chosen))):
+            raise Refused("the solver returned a selection that breaks the program: the run stops")
+        return chosen
+
+    def measure(self, chosen):
+        """(rows, rows within margin quotas, rows toward the minimums) of a selection, in exact integers; None when it
+        breaks a limit or n."""
+        chosen = set(chosen)
+        if len(chosen) > self.spec.n or any(len(chosen.intersection(m)) > bound for bound, m in self.limits):
+            return None
+        within = sum(min(len(chosen.intersection(self.cell_rows[cell])), self.spec.margins[cell[0]].quotas[cell[1]])
+                     for cell in self.cells)
+        toward = sum(min(len(chosen.intersection(members)), minimum.min)
+                     for members, minimum in zip(self.mark_rows, self.spec.minimums))
+        return len(chosen), within, toward
+
+    def full_levels(self):
+        spec = self.spec
+        return spec.n, spec.n * len(spec.margins), sum(minimum.min for minimum in spec.minimums)
+
+    def full(self):
+        """A full selection of the pool, or None when there is none."""
+        rows, within, toward = self.full_levels()
+        return self.solve("rank", (rows, rows), within, toward)
+
+    def best(self):
+        """The best levels the pool allows, maximised in order (rows, rows within margin quotas, rows toward the
+        minimums), and a selection that reaches them."""
+        rows = len(self._sure(self.solve("rows", (0, self.spec.n))))
+        within = self.measure(self._sure(self.solve("margins", (rows, rows))))[1]
+        chosen = self._sure(self.solve("minimums", (rows, rows), within))
+        return (rows, within, self.measure(chosen)[2]), chosen
+
+    @staticmethod
+    def _sure(chosen):
+        if chosen is None:
+            raise Refused("the solver found no selection where one exists: the run stops")
+        return chosen
+
+    def walk(self, levels, witness):
+        """The rows kept in rank order: each one only if the levels stay reachable with it, from rows not yet read.
+
+        `witness` is a selection reaching the levels: a row it holds is kept without a solve. Until a row is kept,
+        whether a row can be kept does not depend on the rows passed before it, so the rows between the next one and
+        the next row of the witness are tested together, then halved to find the first one that can be kept."""
+        rows, within, toward = levels
+        exact = (rows, within) == self.full_levels()[:2]
+        kept, passed, current, tally = set(), set(), set(witness), Counter()
+        i = 0
+        while len(kept) < rows and i < len(self.pool):
+            if i not in current:
+                stop = min(j for j in current if j > i)
+                block = [j for j in range(i, stop) if not self._blocked(j, tally, exact)]
+                first, found = self._first_keepable(block, levels, kept, passed)
+                passed.update(range(i, stop if first is None else first))
+                if first is None:
+                    i = stop
+                    continue
+                i, current = first, set(found)
+            kept.add(i)
+            tally.update(self.limits_of[i])
+            tally.update(("cell", j) for j in self.cells_of[i])
+            i += 1
+        if len(kept) != rows:
+            raise Refused("the walk ended short of the levels the pool allows: the run stops")
+        return sorted(kept)
+
+    def _first_keepable(self, block, levels, kept, passed):
+        """The first row of `block` that can be kept, with a selection keeping it, or (None, None). The block's first
+        row is tried alone, then the rest together, then halved."""
+        rows, within, toward = levels
+
+        def keeping(i):
+            # A witness that favours early rows lets later rows be kept without a solve.
+            return self.solve("rank", (rows, rows), within, toward, kept | {i}, passed)
+
+        if not block:
+            return None, None
+        found = keeping(block[0])
+        if found is not None:
+            return block[0], found
+        rest = block[1:]
+        if not rest or self.solve("none", (rows, rows), within, toward, kept, passed, rest) is None:
+            return None, None
+        low, high = 0, len(rest)
+        while high - low > 1:
+            middle = (low + high) // 2
+            if self.solve("none", (rows, rows), within, toward, kept, passed, rest[low:middle]) is None:
+                low = middle
+            else:
+                high = middle
+        return rest[low], keeping(rest[low])
+
+    def _blocked(self, i, tally, exact):
+        """True when the rows kept already fill one of this row's limits, or, in a full selection, its margin
+        value."""
+        if any(tally[index] >= self.limits[index][0] for index in self.limits_of[i]):
+            return True
+        return exact and any(tally[("cell", j)] >= self.spec.margins[self.cells[j][0]].quotas[self.cells[j][1]]
+                             for j in self.cells_of[i])
+
+
+def _choose(spec, pool, last):
+    """The positions kept in the pool and whether they form a full selection; None when the pool has no full
+    selection and a later reserve tier is left to try."""
+    if not pool:
+        return ([], False) if last else (None, False)
+    program = _Program(spec, pool)
+    witness = program.full()
+    if witness is not None:
+        return program.walk(program.full_levels(), witness), True
+    if not last:
+        return None, False
+    levels, witness = program.best()
+    return program.walk(levels, witness), False
+
+
+def _stages(spec, rows):
+    """Each kept row in rank order, marked refill when a margin value of its had reached its quota before it."""
+    seen = [Counter() for _ in spec.margins]
+    out = []
+    for row in rows:
+        over = False
+        for m, value in enumerate(row.cells):
+            over = over or seen[m][value] >= spec.margins[m].quotas[value]
+            seen[m][value] += 1
+        out.append((row, "refill" if over else "quota"))
     return out
 
 
@@ -269,155 +471,56 @@ def _quota_line(quota, selected, available):
             "shortfall": max(0, quota - selected), "status": status}
 
 
-class _Draw:
-    """One draw over a pool in rank order: the passes, then the report."""
+def _strata_report(spec, rows, pool):
+    counts, available = Counter(r.stratum for r in rows), Counter(r.stratum for r in pool)
+    values = {v: _quota_line(q, counts[v], available[v]) for v, q in spec.rows.quotas.items()}
+    return {"attribute": spec.rows.attribute, "shortfall": sum(v["shortfall"] for v in values.values()),
+            "values": values}
 
-    def __init__(self, spec, pool):
-        self.spec = spec
-        self.pool = pool
-        self.strata_quota = spec.rows.quotas if spec.rows else {"": spec.n}
-        self.margins = spec.margins or (Margin("", {"": spec.n}),)
-        self.taken, self.taken_ids, self.blocked = [], set(), set()
-        self.strata, self.cap_counts = Counter(), Counter()
-        self.cells = [Counter() for _ in self.margins]
-        self.marks = [0] * len(spec.minimums)
-        self.by_cap = defaultdict(list)
-        self.avail = [Counter() for _ in self.margins]
-        for row in pool:
-            for key in row.caps:
-                self.by_cap[key].append(row)
-            for m, cell in enumerate(row.cells):
-                self.avail[m][(row.stratum, cell)] += 1
-        self.reach = self._reach()
 
-    def run(self):
-        available = [sum(row.marks[k] for row in self.pool) for k in range(len(self.spec.minimums))]
-        for k in sorted(range(len(available)), key=lambda k: (available[k], k)):
-            for row in self.pool:
-                if self.marks[k] >= self.spec.minimums[k].min:
-                    break
-                if row.marks[k] and self._fits(row) and self._keeps_reach(row):
-                    self._take(row, "minimum")
-        for row in self.pool:
-            if self._fits(row) and self._keeps_reach(row):
-                self._take(row, "quota")
-        for margins_bind in (True, False):
-            for row in self.pool:
-                if self._fits(row, margins_bind):
-                    self._take(row, "refill")
-        return self
+def _margin_report(rows, pool, m, margin):
+    counts, available = Counter(r.cells[m] for r in rows), Counter(r.cells[m] for r in pool)
+    values = {v: _quota_line(q, counts[v], available[v]) for v, q in margin.quotas.items()}
+    shortfall = sum(v["shortfall"] for v in values.values())
+    refilled = sum(v["over"] for v in values.values())
+    status = "met" if shortfall == 0 else ("refilled" if refilled == shortfall else "short")
+    return {"attribute": margin.attribute, "refilled": refilled, "shortfall": shortfall, "status": status,
+            "values": values}
 
-    def _fits(self, row, margins_bind=True):
-        if row.id in self.taken_ids or row.id in self.blocked or len(self.taken) >= self.spec.n:
-            return False
-        if self.strata[row.stratum] >= self.strata_quota[row.stratum]:
-            return False
-        if margins_bind and any(self.cells[m][cell] >= self.margins[m].quotas[cell]
-                                for m, cell in enumerate(row.cells)):
-            return False
-        return all(self.cap_counts[key] < self.spec.caps[key[0]].max for key in row.caps)
 
-    def _keeps_reach(self, row):
-        return all(after == before - 1 for after, before in zip(self._reach(row), self.reach))
+def _minimum_report(rows, pool, k, minimum):
+    got = sum(r.marks[k] for r in rows)
+    return {"attribute": minimum.attribute, "available": sum(r.marks[k] for r in pool), "min": minimum.min,
+            "selected": got, "shortfall": max(0, minimum.min - got),
+            "status": "met" if got >= minimum.min else "short", "value": minimum.value}
 
-    def _take(self, row, stage):
-        self.taken.append((row, stage))
-        self.taken_ids.add(row.id)
-        self.strata[row.stratum] += 1
-        for m, cell in enumerate(row.cells):
-            self.cells[m][cell] += 1
-        for k, mark in enumerate(row.marks):
-            self.marks[k] += mark
-        self._withdraw(row)
-        for key in row.caps:
-            self.cap_counts[key] += 1
-            if self.cap_counts[key] == self.spec.caps[key[0]].max:
-                for other in self._still_open(key):
-                    self.blocked.add(other.id)
-                    self._withdraw(other)
-        self.reach = self._reach()
 
-    def _still_open(self, key):
-        return [row for row in self.by_cap[key] if row.id not in self.taken_ids and row.id not in self.blocked]
+def _cap_report(rows, index, cap):
+    counts = list(Counter(key for r in rows for key in r.caps if key[0] == index).values())
+    largest = max(counts, default=0)
+    return {"attribute": cap.attribute, "largest": largest, "max": cap.max,
+            "status": "held" if largest <= cap.max else "exceeded",
+            "values_at_max": sum(count == cap.max for count in counts)}
 
-    def _withdraw(self, row):
-        for m, cell in enumerate(row.cells):
-            self.avail[m][(row.stratum, cell)] -= 1
 
-    def _gone_with(self, row):
-        """The rows taking `row` withdraws: itself, and the rest of any cap it fills."""
-        gone = {row.id: row}
-        for key in row.caps:
-            if self.cap_counts[key] + 1 == self.spec.caps[key[0]].max:
-                gone.update((other.id, other) for other in self._still_open(key))
-        return list(gone.values())
-
-    def _reach(self, extra=None):
-        """The most rows the remaining stratum quotas can still take, then the same per margin, once `extra` is taken
-        when given."""
-        gone = self._gone_with(extra) if extra is not None else []
-        supply = _left(self.strata_quota, self.strata, extra.stratum if extra is not None else None)
-        selectable = Counter()
-        for (stratum, _), count in self.avail[0].items():
-            selectable[stratum] += count
-        for row in gone:
-            selectable[row.stratum] -= 1
-        out = [sum(min(left, selectable[stratum]) for stratum, left in supply.items())]
-        for m, margin in enumerate(self.margins):
-            capacity = self.avail[m].copy()
-            for row in gone:
-                capacity[(row.stratum, row.cells[m])] -= 1
-            demand = _left(margin.quotas, self.cells[m], extra.cells[m] if extra is not None else None)
-            out.append(max_flow(supply, demand, capacity))
-        return tuple(out)
-
-    def report(self, frame_rows, tier, last_tier):
-        stages = Counter(stage for _, stage in self.taken)
-        spec = self.spec
-        return {
-            "caps": [self._cap_report(i, cap) for i, cap in enumerate(spec.caps)],
-            "family": None if spec.family is None else {"attribute": spec.family, "kept": len(self.pool),
-                                                        "rows": frame_rows},
-            "margins": [self._margin_report(m, margin) for m, margin in enumerate(spec.margins)],
-            "minimums": [self._minimum_report(k, minimum) for k, minimum in enumerate(spec.minimums)],
-            "n": spec.n,
-            "reserve": None if spec.reserve is None else {"attribute": spec.reserve, "last_tier": last_tier,
-                                                          "tier_used": tier},
-            "rows": None if spec.rows is None else self._strata_report(),
-            "selected": len(self.taken),
-            "shortfall": spec.n - len(self.taken),
-            "stages": {stage: stages[stage] for stage in STAGES},
-        }
-
-    def _strata_report(self):
-        available = Counter(row.stratum for row in self.pool)
-        values = {value: _quota_line(quota, self.strata[value], available[value])
-                  for value, quota in self.spec.rows.quotas.items()}
-        return {"attribute": self.spec.rows.attribute, "shortfall": sum(v["shortfall"] for v in values.values()),
-                "values": values}
-
-    def _margin_report(self, m, margin):
-        available = Counter(row.cells[m] for row in self.pool)
-        values = {value: _quota_line(quota, self.cells[m][value], available[value])
-                  for value, quota in margin.quotas.items()}
-        shortfall = sum(v["shortfall"] for v in values.values())
-        refilled = sum(v["over"] for v in values.values())
-        status = "met" if shortfall == 0 else ("refilled" if refilled == shortfall else "short")
-        return {"attribute": margin.attribute, "refilled": refilled, "shortfall": shortfall, "status": status,
-                "values": values}
-
-    def _minimum_report(self, k, minimum):
-        got = self.marks[k]
-        return {"attribute": minimum.attribute, "available": sum(row.marks[k] for row in self.pool),
-                "min": minimum.min, "selected": got, "shortfall": max(0, minimum.min - got),
-                "status": "met" if got >= minimum.min else "short", "value": minimum.value}
-
-    def _cap_report(self, index, cap):
-        counts = [count for key, count in self.cap_counts.items() if key[0] == index]
-        largest = max(counts, default=0)
-        return {"attribute": cap.attribute, "largest": largest, "max": cap.max,
-                "status": "held" if largest <= cap.max else "exceeded",
-                "values_at_max": sum(count == cap.max for count in counts)}
+def _report(spec, pool, kept, full, tier, last_tier):
+    rows = [row for row, _ in kept]
+    stages = Counter(stage for _, stage in kept)
+    return {
+        "caps": [_cap_report(rows, i, cap) for i, cap in enumerate(spec.caps)],
+        "family": None if spec.family is None else {"attribute": spec.family, "families": len({r.family for r in pool}),
+                                                    "rows": len(pool)},
+        "full": full,
+        "margins": [_margin_report(rows, pool, m, margin) for m, margin in enumerate(spec.margins)],
+        "minimums": [_minimum_report(rows, pool, k, minimum) for k, minimum in enumerate(spec.minimums)],
+        "n": spec.n,
+        "reserve": None if spec.reserve is None else {"attribute": spec.reserve, "last_tier": last_tier,
+                                                      "tier_used": tier},
+        "rows": None if spec.rows is None else _strata_report(spec, rows, pool),
+        "selected": len(rows),
+        "shortfall": spec.n - len(rows),
+        "stages": {stage: stages[stage] for stage in STAGES},
+    }
 
 
 def has_shortfall(report):
@@ -425,19 +528,9 @@ def has_shortfall(report):
                 or any(m["shortfall"] for m in report["minimums"]))
 
 
-def _one_per_family(rows):
-    """Each family's lowest-rank row, `rows` being in rank order."""
-    seen, kept = set(), []
-    for row in rows:
-        if row.family not in seen:
-            seen.add(row.family)
-            kept.append(row)
-    return kept
-
-
 def sample(frame, spec, seed):
-    """The rows the seed selects, as {"id", "stage"} in the order taken, and the report. `frame` is a list of row
-    objects, `spec` a parsed Spec and `seed` 32 bytes."""
+    """The rows the seed selects, as {"id", "stage"} in rank order, and the report. `frame` is a list of row objects,
+    `spec` a parsed Spec and `seed` 32 bytes."""
     if not isinstance(seed, bytes) or len(seed) != 32:
         raise Refused("a seed is 32 bytes")
     parsed = [_row(doc, spec, seed, f"frame row {i}") for i, doc in enumerate(frame, 1)]
@@ -450,27 +543,48 @@ def sample(frame, spec, seed):
     tiers = sorted({row.tier for row in rows}) or [0]
     for tier in tiers:
         pool = [row for row in rows if row.tier <= tier]
-        draw = _Draw(spec, _one_per_family(pool) if spec.family else pool).run()
-        report = draw.report(len(pool), tier, tiers[-1])
-        if not has_shortfall(report) or tier == tiers[-1]:
-            return [{"id": row.id, "stage": stage} for row, stage in draw.taken], report
+        chosen, full = _choose(spec, pool, tier == tiers[-1])
+        if chosen is not None:
+            kept = _stages(spec, [pool[i] for i in chosen])
+            return [{"id": row.id, "stage": stage} for row, stage in kept], _report(spec, pool, kept, full, tier,
+                                                                                   tiers[-1])
+
+
+def parse_frame(data, what):
+    """The frame's rows from its bytes: JSON objects, one per line, lines split on "\\n" only."""
+    text = decode(data, what)
+    return [parse_json(line, f"{what} line {i}") for i, line in enumerate(text.split("\n"), 1) if line.strip()]
 
 
 def read_frame(path):
-    """The frame's rows, one JSON object per line. Lines split on "\\n" only: a U+2028 inside a JSON string stays."""
-    try:
-        with open(path, encoding="utf-8", newline="") as fh:
-            lines = fh.read().split("\n")
-    except (OSError, UnicodeDecodeError) as e:
-        raise Refused(f"frame {path}: {e}") from e
-    return [parse_json(line, f"frame {path} line {i}") for i, line in enumerate(lines, 1) if line.strip()]
+    return parse_frame(read_bytes(path, "frame"), f"frame {path}")
+
+
+def revision():
+    """The sampler's revision: SHA-256 over every module of vkpi/sets, by name, each framed with its source, line ends
+    as LF. Any change to the code changes it."""
+    folder = os.path.dirname(os.path.abspath(__file__))
+    digest = hashlib.sha256(framed(REVISION_TAG))
+    for name in sorted(entry for entry in os.listdir(folder) if entry.endswith(".py") and entry[:-3].isidentifier()):
+        source = read_bytes(os.path.join(folder, name), "source").replace(b"\r\n", b"\n")
+        digest.update(framed(name.encode("ascii")) + framed(source))
+    return digest.digest()
+
+
+def context_hash(frame_aggregate, spec_bytes, sampler):
+    """SHA-256(frame(tag) || frame aggregate || SHA-256 of the spec's bytes || sampler revision), the last three 32
+    bytes each: what the seed binds besides the drand round and the domain."""
+    if len(frame_aggregate) != 32 or len(sampler) != 32:
+        raise Refused("the frame aggregate and the sampler revision are 32 bytes each")
+    return hashlib.sha256(framed(CONTEXT_TAG) + frame_aggregate + hashlib.sha256(spec_bytes).digest()
+                          + sampler).digest()
 
 
 def summary(report):
     """The report in a few lines, counts only."""
     stages = report["stages"]
-    lines = [f"selected {report['selected']} of n = {report['n']} (minimum {stages['minimum']}, "
-             f"quota {stages['quota']}, refill {stages['refill']})"]
+    lines = [f"selected {report['selected']} of n = {report['n']} (quota {stages['quota']}, refill "
+             f"{stages['refill']}); {'a full selection' if report['full'] else 'no full selection in the pool'}"]
     if report["rows"]:
         lines += [f"{report['rows']['attribute']} {value}: {line['selected']} of {line['quota']}, short"
                   for value, line in report["rows"]["values"].items() if line["status"] != "met"]
@@ -489,29 +603,62 @@ def summary(report):
     return lines
 
 
-def main(argv=None):
+def _seed(args, frame_bytes, spec_bytes):
+    """The draw's seed, recomputed from the verified beacon record, and what it binds. The frame must be the file
+    the manifest commits under --frame-path."""
+    manifest = load_json(args.manifest, "manifest")
+    salts = commit.check_salts(load_json(args.salts, "salts file"), manifest)
+    if args.frame_path not in salts:
+        raise Refused(f"{args.frame_path}: no salt for it in the salts file")
+    if not commit.verify_file(manifest, args.frame_path, salts[args.frame_path], frame_bytes):
+        raise Refused(f"{args.frame}: not the file the manifest commits as {args.frame_path}")
+    record = drand.verify_record(load_json(args.beacon, "beacon"))
+    sampler = revision()
+    context = context_hash(bytes.fromhex(manifest["aggregate"]), spec_bytes, sampler)
+    seed = drand.derive_seed(args.domain, bytes.fromhex(record["randomness"]), context)
+    if args.seed is not None and from_hex(args.seed, 32, "--seed") != seed:
+        raise Refused("--seed is not the seed the beacon, the domain and the context give")
+    binding = {"beacon_round": record["round"], "context": context.hex(), "domain": args.domain,
+               "frame_aggregate": manifest["aggregate"], "frame_path": args.frame_path,
+               "randomness": record["randomness"], "sampler": sampler.hex(),
+               "spec_sha256": hashlib.sha256(spec_bytes).hexdigest()}
+    return seed, binding
+
+
+def _parser():
     parser = argparse.ArgumentParser(prog="python3 -m vkpi.sets.sample",
-                                     description="A deterministic stratified sample of a frame.")
+                                     description="A deterministic stratified sample of a committed frame.")
     parser.add_argument("--frame", required=True, help="JSONL, one object per line: an id and the spec's attributes")
+    parser.add_argument("--frame-path", required=True, help="the frame's path in the commitment manifest")
+    parser.add_argument("--manifest", required=True, help="the public manifest that commits the frame")
+    parser.add_argument("--salts", required=True, help="that commitment's private salts")
     parser.add_argument("--spec", required=True, help=f"the quotas, format {SPEC_FORMAT}")
-    parser.add_argument("--seed", required=True, help="64 hex characters, as `drand seed` prints them")
+    parser.add_argument("--beacon", required=True, help="the drand beacon record, from `drand fetch`")
+    parser.add_argument("--domain", required=True, help="the draw's domain string, as F0 freezes it")
+    parser.add_argument("--seed", help="the seed expected, in hex; refused unless the beacon gives it")
     parser.add_argument("--out", required=True, help="the selection to write, outside every git working tree")
-    args = parser.parse_args(argv)
+    return parser
+
+
+def main(argv=None):
+    args = _parser().parse_args(argv)
     try:
         require_private(args.out, "the selection")
         if os.path.lexists(args.out):
             raise Refused(f"{args.out} exists already: nothing is overwritten")
-        spec = parse_spec(load_json(args.spec, "spec"))
-        seed = from_hex(args.seed, 32, "--seed")
-        selected, report = sample(read_frame(args.frame), spec, seed)
-        document = {"format": SELECTION_FORMAT, "frame_sha256": sha256_file(args.frame), "report": report,
-                    "seed": seed.hex(), "selected": selected, "spec_sha256": sha256_file(args.spec)}
+        frame_bytes, spec_bytes = read_bytes(args.frame, "frame"), read_bytes(args.spec, "spec")
+        seed, binding = _seed(args, frame_bytes, spec_bytes)
+        spec = parse_spec(parse_json(decode(spec_bytes, f"spec {args.spec}"), f"spec {args.spec}"))
+        selected, report = sample(parse_frame(frame_bytes, f"frame {args.frame}"), spec, seed)
+        document = {"binding": binding, "format": SELECTION_FORMAT, "report": report, "seed": seed.hex(),
+                    "frame_sha256": hashlib.sha256(frame_bytes).hexdigest(), "selected": selected}
         write_new(args.out, pretty_json(document), private=True)
     except Refused as e:
         print(f"refused: {e}", file=sys.stderr)
         return 2
     for line in summary(report):
         print(line)
+    print(f"seed {seed.hex()} from round {binding['beacon_round']}; sampler revision {binding['sampler']}")
     return 0
 
 

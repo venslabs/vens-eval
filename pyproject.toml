@@ -7,9 +7,13 @@ name = "vens-kpi"
 version = "0.0.0"
 requires-python = ">=3.12"
 # vkpi/sets/drand.py checks drand's BLS12-381 signatures with py_ecc, the Ethereum Foundation's implementation of the
-# curve and of the RFC 9380 hash to G1. Importing py_ecc.bls loads eth-utils, which loads pydantic and cytoolz; the
-# whole tree is pinned, so a draw is verified by the same code everywhere.
+# curve and of the RFC 9380 hash to G1. Importing py_ecc.bls loads eth-utils, which loads pydantic and cytoolz.
+# vkpi/sets/sample.py checks every draw step with an exact integer program, solved by HiGHS through
+# scipy.optimize.milp; the standard library has no integer-programming solver. Every package is pinned, so a draw is
+# verified and sampled by the same code everywhere.
 dependencies = [
+    "scipy==1.18.1",
+    "numpy==2.5.4",
     "py-ecc==8.0.0",
     "eth-typing==6.0.0",
     "eth-utils==6.0.0",

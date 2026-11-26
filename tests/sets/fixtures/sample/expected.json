@@ -11,9 +11,10 @@
     ],
     "family": {
       "attribute": "family",
-      "kept": 25,
+      "families": 25,
       "rows": 48
     },
+    "full": false,
     "margins": [
       {
         "attribute": "vector",
@@ -22,7 +23,7 @@
         "status": "refilled",
         "values": {
           "absent": {
-            "available": 4,
+            "available": 10,
             "over": 0,
             "quota": 2,
             "selected": 2,
@@ -38,7 +39,7 @@
             "status": "short"
           },
           "v3": {
-            "available": 20,
+            "available": 37,
             "over": 1,
             "quota": 8,
             "selected": 9,
@@ -51,18 +52,18 @@
     "minimums": [
       {
         "attribute": "multi_package",
-        "available": 1,
+        "available": 3,
         "min": 3,
-        "selected": 1,
-        "shortfall": 2,
-        "status": "short",
+        "selected": 3,
+        "shortfall": 0,
+        "status": "met",
         "value": true
       },
       {
         "attribute": "fixed_version",
-        "available": 12,
+        "available": 24,
         "min": 5,
-        "selected": 8,
+        "selected": 7,
         "shortfall": 0,
         "status": "met",
         "value": false
@@ -79,7 +80,7 @@
       "shortfall": 0,
       "values": {
         "HIGH": {
-          "available": 4,
+          "available": 7,
           "over": 0,
           "quota": 4,
           "selected": 4,
@@ -87,7 +88,7 @@
           "status": "met"
         },
         "LOW": {
-          "available": 11,
+          "available": 20,
           "over": 0,
           "quota": 4,
           "selected": 4,
@@ -95,7 +96,7 @@
           "status": "met"
         },
         "MEDIUM": {
-          "available": 10,
+          "available": 21,
           "over": 0,
           "quota": 4,
           "selected": 4,
@@ -107,39 +108,30 @@
     "selected": 12,
     "shortfall": 0,
     "stages": {
-      "minimum": 6,
-      "quota": 5,
+      "quota": 11,
       "refill": 1
     }
   },
   "seed": "56be3f5ba68fd623b7df06af48983b766b3bd1b22a67251bc8651b887d4f627f",
   "selected": [
     {
-      "id": "CVE-2099-0044",
-      "stage": "minimum"
+      "id": "CVE-2099-0012",
+      "stage": "quota"
     },
     {
       "id": "CVE-2099-0010",
-      "stage": "minimum"
+      "stage": "quota"
     },
     {
-      "id": "CVE-2099-0037",
-      "stage": "minimum"
-    },
-    {
-      "id": "CVE-2099-0017",
-      "stage": "minimum"
+      "id": "CVE-2099-0044",
+      "stage": "quota"
     },
     {
       "id": "CVE-2099-0029",
-      "stage": "minimum"
+      "stage": "quota"
     },
     {
       "id": "CVE-2099-0041",
-      "stage": "minimum"
-    },
-    {
-      "id": "CVE-2099-0012",
       "stage": "quota"
     },
     {
@@ -155,12 +147,20 @@
       "stage": "quota"
     },
     {
-      "id": "CVE-2099-0031",
+      "id": "CVE-2099-0021",
       "stage": "quota"
     },
     {
-      "id": "CVE-2099-0021",
+      "id": "CVE-2099-0046",
+      "stage": "quota"
+    },
+    {
+      "id": "CVE-2099-0036",
       "stage": "refill"
+    },
+    {
+      "id": "CVE-2099-0019",
+      "stage": "quota"
     }
   ]
 }

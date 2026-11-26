@@ -8,8 +8,9 @@ The code is public. The sets it builds stay private until they are revealed.
 | `drand` | the public random value of a draw, cross-checked and verified | a beacon record |
 | `sample` | the deterministic stratified sample of a frame | a private selection |
 
-Python 3.12. `pip install -e .` installs the pins of `pyproject.toml`; only `drand`'s signature check needs them.
-Tests: `python3 -m unittest` from the repository root, $0 and offline; `VKPI_LIVE_DRAND=1` adds one live fetch.
+Python 3.12. `pip install -e .` installs the pins of `pyproject.toml`: py_ecc for `drand`'s signature check, scipy for
+`sample`'s integer programs. Tests: `python3 -m unittest` from the repository root, $0 and offline;
+`VKPI_LIVE_DRAND=1` adds one live fetch.
 
 ## What stays private
 
@@ -19,6 +20,8 @@ Tests: `python3 -m unittest` from the repository root, $0 and offline; `VKPI_LIV
 - The seed is public once its round is out: the randomness is drand's, and the context hash is published. Anyone can
   then rerun the sampler on the frame, so the frame, image list included, is what keeps the selection sealed until
   the reveal.
+- A refusal never echoes what it refuses: it names the file, the line or row, the field and the kind of error, never
+  a value or a key of the frame.
 
 ## Commitments (`commit.py`)
 
@@ -99,7 +102,8 @@ relays' agreement is a second check, not the only one. `verify BEACON.json` reru
 anyone holding the record, and checks its relays, that it was fetched after its round, and which py_ecc verified it.
 
 **Seed.** `seed = SHA-256(domain || randomness || context_hash)`, the domain an ASCII string F0 freezes, the
-randomness and the context hash (for instance the committed frame's aggregate) 32 bytes each.
+randomness and the context hash 32 bytes each. For a sample, the context binds the frame, the spec and the sampler
+(see below), and `sample` recomputes the seed itself from the verified record.
 
 ```
 python3 -m vkpi.sets.drand round 2026-11-27T09:00:00Z
@@ -112,7 +116,7 @@ python3 -m vkpi.sets.drand seed BEACON.json --domain DOMAIN --context-hash HEX
 
 **Frame.** JSONL, one object per line: a unique `id` and every attribute the spec names. A missing attribute, or a
 stratum or margin value with no quota, is refused: nothing is invented. A refusal names the row by its position in
-the frame, never by its id.
+the frame and the field, never the id or the value.
 
 **Spec.** The sealed set of the v0.7.0 design:
 
@@ -139,8 +143,8 @@ the frame, never by its id.
 - `caps`: at most `max` rows per value. A list value (a CVE found in several images) counts toward each of its
   values.
 - `minimums`: at least `min` rows whose attribute equals `value`, type included (`1` is not `true`).
-- `family`: one row per value, for "one CVE per advisory/package family". A CVE in several families carries the key
-  of their union.
+- `family`: at most one row per value, for "one CVE per advisory/package family". A CVE in several families carries
+  the key of their union.
 - `reserve`: an integer, 0 for the main frame, then 1, 2, ... for the listed reserve in its order. Ids are unique
   across tiers: a CVE found in several tiers carries the lowest.
 
@@ -151,40 +155,70 @@ the INV bases or the sentinels.
 
 1. **Order.** A row's rank is SHA-256(seed || id), the id in UTF-8. Rows are read by increasing rank, and the line
    order plays no part.
-2. **One per family.** Each family keeps its lowest-rank row among the tiers in use, before any quota. A reserve row
-   of lower rank can thus become its family's representative once its tier is in use.
-3. **Reserve.** The sample is drawn from tiers 0 to k, for the smallest k at which nothing is short: no stratum, no
-   minimum and no margin value, refilled or not. A margin value the main frame cannot fill calls the next reserve
-   tier before any refill. Otherwise the sample is drawn from every tier.
-4. **Greedy.** A row is taken only if it exceeds no quota (stratum, margin, cap, n) and keeps the quotas reachable:
-   the most rows the remaining strata can still take, and for each margin the most rows the remaining strata and
-   margin quotas can still take (a max-flow from strata to margin values over the selectable rows), each drop by
-   exactly one. A row that fills a cap withdraws the rest of that cap's rows from those counts first, so it cannot
-   quietly starve a stratum. Two passes:
-   - *minimum*: the minimums one at a time, the scarcest first, each taking the rows that count toward it until it
-     is met;
-   - *quota*: any row.
+2. **Full selection.** Exactly n rows, every stratum and every margin value at its quota, every minimum met, no cap
+   exceeded and at most one row per family, all at once.
+3. **Reserve.** The pool is tiers 0 to k, for the smallest k at which a full selection exists; otherwise every tier.
+   A margin value the main frame cannot fill thus calls the next reserve tier before any refill.
+4. **Walk.** Rows are read in rank order. A row is kept if and only if the rows kept so far, this one included, can
+   still be completed into the best selection the pool allows, from rows not yet read. When a full selection exists,
+   the walk returns the first full selection in rank order. A family gives the first of its rows that fits.
+5. **No full selection.** The best selection then has, in this order of priority:
+   - the most rows, with no stratum, cap, family or n exceeded and margin values allowed past their quota;
+   - among those, the most rows within their margin quotas;
+   - among those, the most rows toward the minimums, each counted up to its minimum;
+   - among those, the first in rank order, by the walk.
 
-   With one margin and no cap reached, this fills every stratum and margin quota the frame can fill; a test checks
-   it against every subset of 400 small frames.
-5. **Refill**, the pre-written rule. The rows a stratum still lacks are taken in order from that same stratum: first
-   rows that fit every margin, then any row, the margins no longer binding. Caps hold, no stratum is exceeded, and a
-   stratum the frame cannot fill stays short.
+   A row past its margin quota is the pre-written refill: it comes from its own stratum and never takes a stratum
+   past its quota. A stratum the pool cannot fill stays short, and every shortfall is reported.
 6. **Report.** Each stratum and minimum is `met` or `short`. Each margin value is `met`, `short`, or `over` by
    refill. Each margin is `met`, `refilled` (its whole shortfall taken from the same strata) or `short`. Each cap is
-   `held`. Every line carries its counts, available rows included.
+   `held`. `full` says whether the pool had a full selection. A kept row is marked `refill` when, in rank order, it
+   comes after one of its margin values reached its quota, otherwise `quota`.
 
-Precedence, highest first: caps and families, strata, margins, minimums. Only the refill goes past a margin quota,
-and only by the rows it adds there.
+Precedence, highest first: caps, families and n, strata, margins, minimums, rank.
+
+**Exactness.** Every keep-or-pass decision, and every level in step 5, is an integer program over all the
+constraints at once: one 0/1 variable per row, one per margin value and one per minimum. HiGHS solves it through
+`scipy.optimize.milp` (scipy 1.18.1, pinned and enforced, with no gap and no time limit). A row's answer cannot change
+until a row is kept, so the rows up to the next one the last solution keeps are tested together, and halved to find
+the first that fits; the decisions are those of the row-by-row walk.
+
+Limits, stated:
+- An infeasibility answer is the solver's own: it carries no certificate. Every selection the solver returns is
+  checked again in exact integer arithmetic before use, and the run stops on a mismatch or on any answer other than
+  optimal or infeasible.
+- Tests compare the selection with a brute force over every subset of 300 small frames (strata, one or two margins,
+  single and list-valued caps, a minimum, families), and run the four frames on which the earlier look-ahead ended
+  short.
+- Time: about 1 to 5 s for n = 100 on frames of 1,000 to 5,000 rows on a laptop, depending on how tight the frame is.
+
+**Seed and context.** `sample` takes no free seed. It verifies the beacon record and checks that the frame is the
+file the manifest commits under `--frame-path`, with its salt. Then it computes:
 
 ```
-python3 -m vkpi.sets.sample --frame FRAME.jsonl --spec QUOTAS.json --seed HEX --out SELECTION.json
+context = SHA-256( frame("vens-kpi/1.0/sets/sample-context") || frame aggregate (32 bytes, from the manifest)
+                   || SHA-256 of the spec file's bytes || sampler revision )
+seed    = SHA-256( domain || randomness || context )
 ```
 
-The selection holds the ids in the order taken with their stage (`minimum`, `quota`, `refill`), the report, the seed
-and the SHA-256 of the frame and of the spec. Rerunning it on the same three inputs gives the same bytes. The
-screen shows counts only, never an id, refusals included.
+The sampler revision is SHA-256 over every module of `vkpi/sets`, by name, each framed with its source (line ends as
+LF). After the round, the frame, the quotas, the family key and the code can no longer change without changing the
+seed. `--seed` is optional, and accepted only when it equals the seed recomputed from the record.
+
+```
+python3 -m vkpi.sets.sample --frame FRAME.jsonl --frame-path PATH --manifest PUBLIC.json --salts PRIVATE.json \
+    --spec QUOTAS.json --beacon BEACON.json --domain DOMAIN --out SELECTION.json
+```
+
+Each input is read once: what is hashed and committed is what is parsed. The selection holds:
+- the ids in rank order, with their stage;
+- the report;
+- the seed and what it binds (round, randomness, domain, context, frame aggregate and path, spec hash, sampler
+  revision);
+- the frame's SHA-256.
+
+The screen shows counts only, never an id, refusals included.
 
 **Determinism**, by test: the same inputs give the same bytes, a shuffled frame gives the same selection, the order
-is SHA-256(seed || id), and `tests/sets/fixtures/sample/` pins one recorded selection (both passes, a refill, a
-family rule, a cap reached, a reserve tier).
+is SHA-256(seed || id), and `tests/sets/fixtures/sample/` pins one recorded selection (a refill, families, a cap
+reached, a reserve tier).

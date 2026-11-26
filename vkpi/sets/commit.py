@@ -28,8 +28,8 @@ import re
 import secrets
 import sys
 
-from vkpi.sets.common import (Refused, canonical_json, from_hex, is_inside, load_json, pretty_json, require_private,
-                              write_new)
+from vkpi.sets.common import (Refused, canonical_json, framed as frame, from_hex, is_inside, load_json, pretty_json,
+                              require_private, write_new)
 
 FORMAT = "vens-kpi/1.0/commitments"
 SALTS_FORMAT = "vens-kpi/1.0/salts"
@@ -38,14 +38,12 @@ AGGREGATE_TAG = b"vens-kpi/1.0/sets/aggregate"
 SALT_BYTES = 32
 
 _PART = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._+-]*")
-_VULN_ID = re.compile(r"CVE[-_./]?\d{4}[-_./]?\d{4}|GHSA(?:[-_./]?[0-9a-z]{4}){3}|TEMP[-_./]?\d{7}[-_./]?[0-9a-f]{6}",
-                      re.IGNORECASE)
+_SEP = r"[-_./+]*"
+_VULN_ID = re.compile(rf"CVE{_SEP}\d{{4}}{_SEP}\d{{4}}"
+                      rf"|GHSA(?:{_SEP}[0-9a-z]{{4}}){{3}}"
+                      rf"|TEMP{_SEP}\d{{7}}{_SEP}[0-9a-f]{{6}}", re.IGNORECASE)
 _SET_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
 _COMMITMENT = re.compile(r"[0-9a-f]{64}")
-
-
-def frame(data):
-    return len(data).to_bytes(8, "big") + data
 
 
 def check_path(path):

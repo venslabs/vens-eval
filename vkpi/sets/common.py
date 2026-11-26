@@ -1,6 +1,8 @@
-"""What the set tools share: the refusal they raise, strict JSON, hex parsing, and the rule that keeps private files
-out of every git working tree."""
-import hashlib
+"""What the set tools share: the refusal they raise, strict JSON, hex parsing, single reads, and the rule that keeps
+private files out of every git working tree.
+
+A refusal never echoes the content it refuses: it names the file, the line or row, the field and the kind of error,
+since the content may be sealed."""
 import json
 import os
 import re
@@ -10,6 +12,15 @@ _HEX = re.compile(r"[0-9a-fA-F]*")
 
 class Refused(Exception):
     """An input, a path or a record the set tools will not use, with the reason."""
+
+
+class _Invalid(ValueError):
+    """A JSON value refused for its kind, the message holding no content."""
+
+
+def framed(data):
+    """`data` preceded by its length as 8 bytes, big-endian."""
+    return len(data).to_bytes(8, "big") + data
 
 
 def canonical_json(obj):
@@ -26,35 +37,46 @@ def _no_duplicates(pairs):
     out = {}
     for key, value in pairs:
         if key in out:
-            raise ValueError(f"duplicate key {key!r}")
+            raise _Invalid("a duplicate key")
         out[key] = value
     return out
 
 
 def _no_constant(name):
-    raise ValueError(f"{name} is not JSON")
+    raise _Invalid("NaN or Infinity")
 
 
 def parse_json(text, what):
     """JSON refused on a duplicate key or a NaN, either of which could hide a second value."""
     try:
         return json.loads(text, object_pairs_hook=_no_duplicates, parse_constant=_no_constant)
+    except json.JSONDecodeError as e:
+        kind = e.msg.split(":")[0].lower()
+        raise Refused(f"{what}: not valid JSON, {kind} at line {e.lineno} column {e.colno}") from e
+    except _Invalid as e:
+        raise Refused(f"{what}: not valid JSON, {e}") from e
     except (ValueError, RecursionError) as e:
-        raise Refused(f"{what}: not valid JSON: {e}") from e
+        raise Refused(f"{what}: not valid JSON, {type(e).__name__}") from e
+
+
+def read_bytes(path, what):
+    """The file's bytes, read once: what is hashed is what is parsed."""
+    try:
+        with open(path, "rb") as fh:
+            return fh.read()
+    except OSError as e:
+        raise Refused(f"{what} {path}: {e.strerror}") from e
+
+
+def decode(data, what):
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError as e:
+        raise Refused(f"{what}: not UTF-8 at byte {e.start}") from e
 
 
 def load_json(path, what):
-    try:
-        with open(path, encoding="utf-8") as fh:
-            text = fh.read()
-    except (OSError, UnicodeDecodeError) as e:
-        raise Refused(f"{what} {path}: {e}") from e
-    return parse_json(text, f"{what} {path}")
-
-
-def sha256_file(path):
-    with open(path, "rb") as fh:
-        return hashlib.file_digest(fh, "sha256").hexdigest()
+    return parse_json(decode(read_bytes(path, what), f"{what} {path}"), f"{what} {path}")
 
 
 def from_hex(text, size, what):
