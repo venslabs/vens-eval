@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools==84.2.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vens-kpi"
+version = "0.0.0"
+requires-python = ">=3.12"
+# vkpi/sets/drand.py checks drand's BLS12-381 signatures with py_ecc, the Ethereum Foundation's implementation of the
+# curve and of the RFC 9380 hash to G1. Importing py_ecc.bls loads eth-utils, which loads pydantic and cytoolz; the
+# whole tree is pinned, so a draw is verified by the same code everywhere.
+dependencies = [
+    "py-ecc==8.0.0",
+    "eth-typing==6.0.0",
+    "eth-utils==6.0.0",
+    "eth-hash==0.8.0",
+    "pydantic==2.14.3",
+    "pydantic-core==2.50.4",
+    "annotated-types==0.8.0",
+    "typing-extensions==4.16.0",
+    "typing-inspection==0.4.5",
+    "cytoolz==1.2.0",
+    "toolz==1.2.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["vkpi*"]

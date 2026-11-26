@@ -1,0 +1,42 @@
+{
+  "caps": [
+    {
+      "attribute": "image",
+      "max": 4
+    }
+  ],
+  "family": "family",
+  "format": "vens-kpi/1.0/quotas",
+  "margins": [
+    {
+      "attribute": "vector",
+      "quotas": {
+        "absent": 2,
+        "v2-only": 2,
+        "v3": 8
+      }
+    }
+  ],
+  "minimums": [
+    {
+      "attribute": "multi_package",
+      "min": 3,
+      "value": true
+    },
+    {
+      "attribute": "fixed_version",
+      "min": 5,
+      "value": false
+    }
+  ],
+  "n": 12,
+  "reserve": "tier",
+  "rows": {
+    "attribute": "severity",
+    "quotas": {
+      "HIGH": 4,
+      "LOW": 4,
+      "MEDIUM": 4
+    }
+  }
+}
