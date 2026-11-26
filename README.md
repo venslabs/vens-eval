@@ -8,7 +8,7 @@ The evaluation framework for [vens](https://github.com/venslabs/vens): what is m
 
 ## The nine axes
 
-Read in tiers 0 to 3, with no weights, sums or averages between axes. R is the last shipped version of vens, rerun next to the candidate.
+Read in tiers 0 to 3, with no weights, sums or averages between axes. R is the last shipped version of vens, identified by its artifacts, rerun with the candidate in the same window (interleaved order) or replayed on the same answers. A9 cost and time need comparable real runs of both versions.
 
 | Tier | Axis | Question |
 |---|---|---|
@@ -25,8 +25,8 @@ Read in tiers 0 to 3, with no weights, sums or averages between axes. R is the l
 ## States
 
 - **SATISFIED**: the requirement is met, with evidence.
-- **PROGRESS ESTABLISHED**: satisfied, and the Holm-corrected lower bound of the gain against R is above 0.
-- **FAILED**: a blocking rule is violated, or a loss beyond the tolerated loss δ is established against R.
+- **PROGRESS ESTABLISHED**: satisfied, and the Holm-corrected lower bound of the gain against R is above 0, with the gain's size printed; for A9, the Holm-corrected U95 of candidate / R must be at most 0.95, a gain of at least 5%.
+- **FAILED**: a blocking rule is violated, or a loss beyond the margin δ is established against R.
 - **UNDETERMINED**: measured, but the data cannot decide; it is not a half-pass.
 - **NOT MEASURED**: the instrument was not applied; it never counts as SATISFIED.
 
