@@ -21,6 +21,10 @@ jobs:
         with:
           python-version: "3.12"
 
+      # vkpi/sets needs scipy, numpy and py_ecc; the extra installs them at the exact pins of pyproject.toml.
+      - name: The sets extra
+        run: python -m pip install --disable-pip-version-check -e ".[sets]"
+
       - name: vens v0.6.0, release asset checked against SHA256SUMS
         working-directory: ${{ runner.temp }}
         run: |
