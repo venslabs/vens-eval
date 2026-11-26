@@ -5,6 +5,7 @@ import json
 import socketserver
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -16,15 +17,18 @@ class Reply:
     headers: dict = field(default_factory=dict)
     delay: float = 0.0
     gzip: bool = False
+    # Read the request, then close the connection without answering.
+    drop: bool = False
 
 
-# Answers the i-th request with replies[i]; the last reply repeats.
+# Answers the i-th request with replies[i], the last reply repeating, or with
+# replies(request) when given a function.
 class FakeUpstream(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, replies: list[Reply]):
+    def __init__(self, replies: list[Reply] | Callable[[dict], Reply]):
         super().__init__(("127.0.0.1", 0), _Handler)
-        self.replies = list(replies)
+        self.replies = replies
         self.requests: list[dict] = []
         self.sent: list[bytes] = []
         self._lock = threading.Lock()
@@ -43,6 +47,8 @@ class FakeUpstream(ThreadingHTTPServer):
     def take(self, request: dict) -> Reply:
         with self._lock:
             self.requests.append(request)
+            if callable(self.replies):
+                return self.replies(request)
             return self.replies[min(len(self.requests), len(self.replies)) - 1]
 
     def __enter__(self):
@@ -67,6 +73,9 @@ class _Handler(BaseHTTPRequestHandler):
             "client_port": self.client_address[1],
         })
         time.sleep(reply.delay)
+        if reply.drop:
+            self.close_connection = True
+            return
         data = json.dumps(reply.body).encode()
         headers = {"Content-Type": "application/json", **reply.headers}
         if reply.gzip and "gzip" in self.headers.get("Accept-Encoding", ""):
@@ -85,7 +94,39 @@ class _Handler(BaseHTTPRequestHandler):
         pass
 
 
-def openai_completion(usage: dict, content: str = "{}") -> dict:
+# Answers every call with the smallest reply its own response schema accepts.
+def schema_answers(provider: str, text: str) -> Callable[[dict], Reply]:
+    def answer(request: dict) -> Reply:
+        body = json.loads(request["body"])
+        if provider == "openai":
+            content = json.dumps(instance(body["response_format"]["json_schema"]["schema"], text))
+            return Reply(200, openai_completion(OPENAI_USAGE, content), gzip=True)
+        content = json.dumps(instance(body["output_config"]["format"]["schema"], text))
+        return Reply(200, anthropic_message(ANTHROPIC_USAGE, content), gzip=True)
+
+    return answer
+
+
+def instance(schema: dict, text: str) -> object:
+    # Every property, one array item, the first value of an enum (so the ids
+    # vens enumerates), and text for any other string.
+    if "enum" in schema:
+        return schema["enum"][0]
+    kind = schema.get("type")
+    if kind == "object":
+        return {name: instance(sub, text) for name, sub in schema.get("properties", {}).items()}
+    if kind == "array":
+        return [instance(schema["items"], text) for _ in range(max(1, schema.get("minItems", 1)))]
+    if kind == "string":
+        return text
+    if kind in ("number", "integer"):
+        return schema.get("minimum", 5)
+    if kind == "boolean":
+        return False
+    raise ValueError(f"no instance for schema type {kind!r}")
+
+
+def openai_completion(usage: dict, content: str = "{}", tier: str = "default") -> dict:
     return {
         "id": "chatcmpl-test",
         "object": "chat.completion",
@@ -98,7 +139,7 @@ def openai_completion(usage: dict, content: str = "{}") -> dict:
             "logprobs": None,
         }],
         "usage": usage,
-        "service_tier": "default",
+        "service_tier": tier,
     }
 
 

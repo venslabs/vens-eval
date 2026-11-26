@@ -13,6 +13,7 @@ python3 -m vkpi.a9.run --vens ./vens --provider anthropic --n 74 \
 
 - The key and the model come from the caller's environment (`ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`, or the `OPENAI_` pair). run.py adds `--llm`, the input and the VEX path, and points both base URLs at the proxy.
 - `--n` is the number of incoming CVEs, taken from the frozen file: run.py does not count them.
+- `--vens` is resolved to an absolute path once, and that file is the one checked, hashed and launched: `./vens` never falls back to a `vens` on PATH.
 - `--vex`, `--log` and `--out` must not exist: one log per run.
 - Exit code: 0 for a complete run, 1 when vens failed or wrote no VEX, 2 when the harness refused to start.
 - The proxy listens on 127.0.0.1 only. `python3 -m vkpi.a9.proxy --log calls.jsonl` runs it alone and prints the two base URLs to export.
@@ -48,12 +49,13 @@ Read in the vens checkout, v0.6.0 tag (2654ca7) and dfa73fd (v0.7.0).
 | `model_served`, `service_tier` | from the response; OpenAI puts the tier next to `usage`, Anthropic inside it |
 | `attempt` | `X-Stainless-Retry-Count` + 1; null without the header |
 | `status` | the provider's status; null when no answer came back (`error` says why, the client got 502 or 504) |
+| `forwarded` | true once the connection to the provider is open and the request goes out; false when the proxy answered alone (404, 411, a refused connection) |
 | `request_bytes`, `response_bytes` | body bytes as sent and as received (a response may be gzip) |
 | `start_ns`, `end_ns` | Unix time in ns: request read by the proxy, response written back |
 | `usage` | the provider's `usage` object, verbatim |
-| `error` | null, `unknown route`, `request without Content-Length`, `upstream <exception>` or `client <exception>` |
+| `error` | null, `unknown route`, `request without Content-Length`, `upstream connect <exception>`, `upstream <exception>` or `client <exception>` |
 
-Never logged: request and response bodies, which can hold the deployment context; headers, so neither `Authorization` nor `x-api-key`; the query string.
+Never logged: request and response bodies, which can hold the deployment context; headers, so neither `Authorization` nor `x-api-key`; the query string. No error message repeats an upstream URL or an `--upstream` argument either, since a URL can carry credentials.
 
 ## The run JSON
 
@@ -63,12 +65,17 @@ Never logged: request and response bodies, which can hold the deployment context
 - `tokens`, by category, also per model under `models`:
     - OpenAI: `input` = `prompt_tokens` − `prompt_tokens_details.cached_tokens`, `cache_read` = `cached_tokens`, `output` = `completion_tokens`, reasoning included.
     - Anthropic: `input` = `input_tokens`, `cache_read` = `cache_read_input_tokens`, `cache_write_5m` and `cache_write_1h` from the `cache_creation` split of `cache_creation_input_tokens`, `output` = `output_tokens`.
-- `usd` = Σ tokens × grid price / 10^6, and `usd_per_cve` = `usd` / N. Both are null, with the reasons in `usd_not_measured`, when a 2xx response has no usable usage (a field missing, null, or not adding up), a request hit an unknown route, the model is not in the grid, or a category in use has no price. An error response or an attempt with no answer reports no usage: it counts as an attempt, with no tokens. Nothing is estimated from bytes.
+- `usd` = Σ tokens × grid price / 10^6, and `usd_per_cve` = `usd` / N. Both are null, with the reasons in `usd_not_measured`, when:
+    - a 2xx response has no usable usage (a field missing, null, or not adding up);
+    - a response was served at a `service_tier`, or an Anthropic `inference_geo`, other than the grid's (`served at tier priority, grid is default`); a response with no tier counts as `unreported`;
+    - a request went out and no answer came back (a reset, a timeout): the provider may have billed it (`request sent, no answer`);
+    - a request hit an unknown route, the model is not in the grid, or a category in use has no price.
+- An error response reports no usage: it counts as an attempt, with no tokens. A request the proxy stopped before the provider (411, a client error, a refused connection) costs nothing. Nothing is estimated from bytes.
 - `vens_sha256`, `prices` (date and sha256 of the grid), and `default_upstreams`, false when `--upstream` sent the calls somewhere other than the provider's API.
 
 ## Price grid
 
-`prices/2026-11-26.json`, USD per million tokens, read on 2026-11-26. Each entry keeps the table header and row it was read from.
+`prices/2026-11-26.json`, USD per million tokens, read on 2026-11-26. Each entry keeps the table header and row it was read from, and the `service_tier` its prices are for (`inference_geo` too, for Anthropic).
 
 | Model | Input | 5m cache write | 1h cache write | Cache read | Output | Source |
 |---|---|---|---|---|---|---|
@@ -77,7 +84,7 @@ Never logged: request and response bodies, which can hold the deployment context
 
 - No price is null: both pages could be read.
 - The OpenAI page gives gpt-5.4-mini no cache-write price. `prompt_tokens_details.cache_write_tokens` stays in the log and is not priced apart: those tokens are in `prompt_tokens − cached_tokens`, priced as input.
-- The grid is the standard tier at the global endpoints, which is what vens asks for: no `inference_geo` (US-only inference costs 1.1x on Claude 4.6 and later), no service tier, and the proxy calls `api.openai.com`, not a regional endpoint ("Regional processing (data residency) endpoints are charged a 10% uplift for models released on or after March 5, 2026"). The tier each response was served at is in the log.
+- The grid is the standard tier (`standard` for Anthropic, `default` for OpenAI) at the global endpoints, which is what vens asks for: no `inference_geo` (US-only inference costs 1.1x on Claude 4.6 and later), no service tier, and the proxy calls `api.openai.com`, not a regional endpoint ("Regional processing (data residency) endpoints are charged a 10% uplift for models released on or after March 5, 2026"). A response served elsewhere leaves `usd` null rather than being priced at the wrong rates.
 - No long-context price applies: Sonnet 4.6 bills its whole 1M context at the standard price, and the OpenAI page lists a single gpt-5.4-mini row.
 - The grid values usage; it is not the invoice, which the spec publishes apart.
 
@@ -90,7 +97,7 @@ python3 -m unittest discover -s tests -t .
 - `test_usage.py`: usage parsing on the response examples of the Chat Completions and Messages references (URLs in the file).
 - `test_proxy.py`: a fake provider; forwarding, statuses, retries, timing, gzip, and keys and bodies kept out of the log.
 - `test_run.py`: a stand-in vens (`fake_vens.py`) for the timer, the pricing and the refusals; the grid is checked against its quoted rows.
-- `test_vens_e2e.py`: the real binaries of both versions through the proxy and a fake provider, for both providers: a 500 the SDK retries, a 200 vens reads but cannot use, a 400 that ends the run. It runs when `VKPI_VENS_V060` and `VKPI_VENS_V070` name the binaries; with `VKPI_E2E_REQUIRED=1` a missing binary fails instead of skipping.
+- `test_vens_e2e.py`: the real binaries of both versions through the proxy and a fake provider, for both providers, twice. First a 500 the SDK retries, a 200 vens reads but cannot use, a 400 that ends the run. Then a run that completes: the fake answers each call with the smallest reply its own response schema accepts (v0.7.0 enumerates the CVE ids, v0.6.0 takes the CVE id as a string), so vens writes its VEX and the timer is checked on a real binary. It runs when `VKPI_VENS_V060` and `VKPI_VENS_V070` name the binaries; with `VKPI_E2E_REQUIRED=1` a missing binary fails instead of skipping.
 
 The CI workflow (`.github/workflows/a9.yml`) takes v0.6.0 from its release asset, checked against the release's `SHA256SUMS`, and builds v0.7.0 from dfa73fd with the vens Makefile. No test calls a provider: every upstream is a local fake and the key is a dummy.
 

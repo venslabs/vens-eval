@@ -14,11 +14,13 @@ from tests.a9.upstream import (
     anthropic_message,
     openai_completion,
     openai_error,
+    schema_answers,
 )
 from vkpi.a9 import run, usage
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 GRID = Path(__file__).resolve().parents[2] / "vkpi" / "a9" / "prices" / "2026-11-26.json"
+FIXTURE_CVE = "CVE-2024-1234"
 FAKE_KEY = "vkpi-fake-key"
 SBOM_SERIAL = "urn:uuid:3e671687-395b-41f5-a30f-a58921a69b79"
 BINARIES = {"v0.6.0": "VKPI_VENS_V060", "v0.7.0": "VKPI_VENS_V070"}
@@ -65,19 +67,16 @@ def stderr_to(path):
 
 
 class VensThroughProxyTest(unittest.TestCase):
-    def test_both_versions_reach_the_provider_only_through_the_proxy(self):
-        for version, variable in BINARIES.items():
-            for provider, case in CASES.items():
-                with self.subTest(version=version, provider=provider):
-                    binary = os.environ.get(variable)
-                    if not binary:
-                        if os.environ.get("VKPI_E2E_REQUIRED"):
-                            self.fail(f"{variable} is not set")
-                        self.skipTest(f"set {variable} to a vens {version} binary")
-                    self.check(Path(binary), provider, case)
+    def binary(self, version):
+        variable = BINARIES[version]
+        if os.environ.get(variable):
+            return Path(os.environ[variable])
+        if os.environ.get("VKPI_E2E_REQUIRED"):
+            self.fail(f"{variable} is not set")
+        self.skipTest(f"set {variable} to a vens {version} binary")
 
-    def check(self, vens, provider, case):
-        with tempfile.TemporaryDirectory() as tmp, FakeUpstream(case["replies"]) as up:
+    def vens_run(self, vens, provider, replies):
+        with tempfile.TemporaryDirectory() as tmp, FakeUpstream(replies) as upstream:
             root = Path(tmp)
             spec = run.Spec(
                 vens=vens,
@@ -88,40 +87,71 @@ class VensThroughProxyTest(unittest.TestCase):
                 prices=GRID,
                 log=root / "calls.jsonl",
                 vens_args=("--config-file", str(FIXTURES / "config.yaml"), "--sbom-serial-number", SBOM_SERIAL),
-                upstreams={provider: up.url},
+                upstreams={provider: upstream.url},
             )
             with stderr_to(root / "vens.log"):
-                result = run.run(spec, {"PATH": os.defpath, "HOME": tmp, **case["env"]})
-            vens_log = (root / "vens.log").read_text(errors="replace")
-            log_text = spec.log.read_text()
-            records = [json.loads(line) for line in log_text.splitlines()]
-            vex_exists = spec.vex.exists()
+                result = run.run(spec, {"PATH": os.defpath, "HOME": tmp, **CASES[provider]["env"]})
+            seen = {
+                "result": result,
+                "log": spec.log.read_text(),
+                "vens_log": (root / "vens.log").read_text(errors="replace"),
+                "vex": json.loads(spec.vex.read_text()) if spec.vex.exists() else None,
+            }
+        return seen, upstream
 
-        self.assertGreaterEqual(len(up.requests), 3, vens_log)
-        self.assertEqual(len(records), len(up.requests), vens_log)
-        for record, seen, sent in zip(records, up.requests, up.sent):
-            self.assertEqual(seen["path"], case["endpoint"])
+    def test_both_versions_reach_the_provider_only_through_the_proxy(self):
+        for version in BINARIES:
+            for provider, case in CASES.items():
+                with self.subTest(version=version, provider=provider):
+                    seen, upstream = self.vens_run(self.binary(version), provider, case["replies"])
+                    self.check_calls(seen, upstream, provider, case)
+
+    def test_both_versions_complete_a_run_on_valid_answers(self):
+        for version in BINARIES:
+            for provider in CASES:
+                with self.subTest(version=version, provider=provider):
+                    seen, upstream = self.vens_run(self.binary(version), provider, schema_answers(provider, FIXTURE_CVE))
+                    result = seen["result"]
+                    self.assertTrue(result["complete"], seen["vens_log"])
+                    self.assertEqual(result["exit_code"], 0)
+                    self.assertLessEqual(result["launched_ns"], result["vex_written_ns"])
+                    self.assertGreater(result["seconds"], 0)
+                    self.assertLessEqual(result["seconds"], result["seconds_to_exit"])
+                    self.assertEqual(result["usd_not_measured"], {})
+                    self.assertEqual(result["calls"], len(upstream.requests))
+                    self.assertEqual(result["attempts"], len(upstream.requests))
+                    self.assertIn(FIXTURE_CVE, [vuln["id"] for vuln in seen["vex"]["vulnerabilities"]])
+
+    def check_calls(self, seen, upstream, provider, case):
+        result, log_text = seen["result"], seen["log"]
+        records = [json.loads(line) for line in log_text.splitlines()]
+        self.assertGreaterEqual(len(upstream.requests), 3, seen["vens_log"])
+        self.assertEqual(len(records), len(upstream.requests), seen["vens_log"])
+        for record, request, sent in zip(records, upstream.requests, upstream.sent):
+            self.assertEqual(request["path"], case["endpoint"])
             self.assertEqual(record["provider"], provider)
             self.assertEqual(record["endpoint"], case["endpoint"])
             self.assertEqual(record["model"], case["model"])
-            self.assertEqual(record["attempt"], int(seen["headers"]["x-stainless-retry-count"]) + 1)
-            self.assertEqual(record["request_bytes"], len(seen["body"]))
+            self.assertEqual(record["attempt"], int(request["headers"]["x-stainless-retry-count"]) + 1)
+            self.assertEqual(record["request_bytes"], len(request["body"]))
             self.assertEqual(record["response_bytes"], len(sent))
             self.assertIsNone(record["error"])
+            self.assertTrue(record["forwarded"])
             self.assertLessEqual(result["launched_ns"], record["start_ns"])
             self.assertLessEqual(record["start_ns"], record["end_ns"])
-            self.assertIn(FAKE_KEY, seen["headers"].get("x-api-key", "") + seen["headers"].get("authorization", ""))
+            headers = request["headers"]
+            self.assertIn(FAKE_KEY, headers.get("x-api-key", "") + headers.get("authorization", ""))
 
         self.assertEqual([(r["attempt"], r["status"]) for r in records[:3]], [(1, 500), (2, 200), (1, 400)])
         self.assertEqual(records[1]["usage"], case["usage"])
-        for private in (FAKE_KEY, "CVE-2024-1234", "a9-plumbing", "buffer overflow"):
+        for private in (FAKE_KEY, FIXTURE_CVE, "a9-plumbing", "buffer overflow"):
             self.assertNotIn(private, log_text)
 
         self.assertEqual(result["attempts"], len(records))
         self.assertEqual(result["calls"], sum(r["attempt"] == 1 for r in records))
         self.assertEqual(result["tokens"], usage.tokens(provider, case["usage"]))
         self.assertIsNotNone(result["usd"])
-        self.assertEqual(result["complete"], result["exit_code"] == 0 and vex_exists)
+        self.assertEqual(result["complete"], result["exit_code"] == 0 and seen["vex"] is not None)
         self.assertEqual(result["seconds"] is None, not result["complete"])
 
 

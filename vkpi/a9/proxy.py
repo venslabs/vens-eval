@@ -50,10 +50,16 @@ class _Upstream(NamedTuple):
 
 
 def _upstream(url: str) -> _Upstream:
-    parts = urlsplit(url)
+    # An upstream URL can carry credentials, so no error repeats it.
+    invalid = ValueError("an upstream must be an http or https URL with a host and a valid port")
+    try:
+        parts = urlsplit(url)
+        port = parts.port
+    except ValueError:
+        raise invalid from None
     if parts.scheme not in ("http", "https") or not parts.hostname:
-        raise ValueError(f"{url!r} is not an http or https URL with a host")
-    return _Upstream(parts.scheme, parts.hostname, parts.port, parts.path.rstrip("/"))
+        raise invalid
+    return _Upstream(parts.scheme, parts.hostname, port, parts.path.rstrip("/"))
 
 
 def base_url_env(proxy_url: str) -> dict[str, str]:
@@ -68,7 +74,7 @@ def parse_upstreams(pairs: list[str]) -> dict[str, str]:
     for pair in pairs:
         provider, _, url = pair.partition("=")
         if provider not in UPSTREAMS:
-            raise ValueError(f"unknown provider in --upstream {pair!r}")
+            raise ValueError(f"--upstream takes PROVIDER=URL, with PROVIDER one of {', '.join(sorted(UPSTREAMS))}")
         _upstream(url)
         upstreams[provider] = url
     return upstreams
@@ -172,6 +178,7 @@ class _Handler(BaseHTTPRequestHandler):
             "service_tier": None,
             "usage": None,
             "error": None,
+            "forwarded": False,
         }
         try:
             self._forward(entry)
@@ -219,6 +226,15 @@ class _Handler(BaseHTTPRequestHandler):
         upstream = self.server.upstreams[provider]
         path = upstream.path + requested.path + (f"?{requested.query}" if requested.query else "")
         conn = self.server.pool.get(upstream)
+        try:
+            if conn.sock is None:
+                conn.connect()
+        except OSError as err:
+            conn.close()
+            self._fail(entry, 504 if isinstance(err, socket.timeout) else 502, f"upstream connect {type(err).__name__}")
+            return
+        # From here the provider may receive the request, and bill it.
+        entry["forwarded"] = True
         try:
             conn.request("POST", path, body=body, headers=_forwarded(self.headers))
             resp = conn.getresponse()

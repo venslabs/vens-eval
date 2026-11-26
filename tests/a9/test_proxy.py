@@ -23,7 +23,7 @@ from vkpi.a9 import proxy
 KEY = "sk-test-SECRET-KEY"
 CONTEXT = "CONTEXT-MARKER internet-facing payment API"
 LOG_FIELDS = {
-    "attempt", "end_ns", "endpoint", "error", "model", "model_served", "provider",
+    "attempt", "end_ns", "endpoint", "error", "forwarded", "model", "model_served", "provider",
     "request_bytes", "response_bytes", "service_tier", "start_ns", "status", "usage",
 }
 ANTHROPIC_HEADERS = {
@@ -94,6 +94,7 @@ class ProxyTest(unittest.TestCase):
         self.assertEqual(record["usage"], ANTHROPIC_USAGE)
         self.assertEqual(record["service_tier"], "standard")
         self.assertIsNone(record["error"])
+        self.assertTrue(record["forwarded"])
 
     def test_never_logs_keys_or_bodies(self):
         headers = {**ANTHROPIC_HEADERS, "Authorization": f"Bearer {KEY}"}
@@ -209,16 +210,29 @@ class ProxyTest(unittest.TestCase):
         self.assertIsNone(record["provider"])
         self.assertIsNone(record["status"])
         self.assertEqual(record["error"], "unknown route")
+        self.assertFalse(record["forwarded"])
 
-    def test_unreachable_upstream(self):
+    def test_unreachable_upstream_gets_nothing(self):
         upstream = f"http://127.0.0.1:{free_port()}"
         with proxy.running(self.log, {"anthropic": upstream}) as server:
             status, _, _ = post(server, "/anthropic/v1/messages", anthropic_body(), ANTHROPIC_HEADERS)
         self.assertEqual(status, 502)
         [record] = self.records()
         self.assertIsNone(record["status"])
-        self.assertEqual(record["error"], "upstream ConnectionRefusedError")
+        self.assertEqual(record["error"], "upstream connect ConnectionRefusedError")
+        self.assertFalse(record["forwarded"])
         self.assertIsNone(record["usage"])
+
+    def test_a_request_sent_and_never_answered(self):
+        with FakeUpstream([Reply(200, {}, drop=True)]) as up, \
+                proxy.running(self.log, {"anthropic": up.url}) as server:
+            status, _, _ = post(server, "/anthropic/v1/messages", anthropic_body(), ANTHROPIC_HEADERS)
+        self.assertEqual(status, 502)
+        self.assertEqual(len(up.requests), 1)
+        [record] = self.records()
+        self.assertIsNone(record["status"])
+        self.assertEqual(record["error"], "upstream RemoteDisconnected")
+        self.assertTrue(record["forwarded"])
 
     def test_request_without_content_length_is_refused(self):
         with FakeUpstream([Reply(200, anthropic_message(ANTHROPIC_USAGE))]) as up, \
@@ -231,6 +245,7 @@ class ProxyTest(unittest.TestCase):
         [record] = self.records()
         self.assertEqual((record["provider"], record["status"]), ("anthropic", None))
         self.assertEqual(record["error"], "request without Content-Length")
+        self.assertFalse(record["forwarded"])
 
     def test_a_call_the_client_gave_up_on_keeps_its_usage(self):
         request = (
@@ -266,6 +281,22 @@ class HelpersTest(unittest.TestCase):
             self.assertEqual(proxy.main(["--log", str(log), "--upstream", "openai=ftp://127.0.0.1"]), 2)
             self.assertFalse(log.exists())
         self.assertIn("vkpi.a9.proxy:", err.getvalue())
+
+    def test_errors_never_repeat_a_credential_from_an_upstream(self):
+        secret = "sk-test-SECRET-IN-URL"
+        for case, pair in enumerate((
+            f"openai=https://user:{secret}@gateway.invalid:99999",
+            f"openai=https://user:{secret}@gateway.invalid:port",
+            f"openai=https://user:{secret}@[::1",
+            f"openai=ftp://user:{secret}@gateway.invalid",
+            f"openai=https://user:{secret}@",
+            f"googleai=https://user:{secret}@gateway.invalid",
+        )):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as tmp, \
+                    mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+                self.assertEqual(proxy.main(["--log", str(Path(tmp) / "calls.jsonl"), "--upstream", pair]), 2)
+                self.assertNotIn(secret, err.getvalue())
+                self.assertNotIn("user:", err.getvalue())
 
 
 if __name__ == "__main__":

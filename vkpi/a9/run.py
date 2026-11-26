@@ -31,17 +31,18 @@ class Spec:
 
 
 def run(spec: Spec, env: dict[str, str]) -> dict:
+    vens = _executable(spec.vens)
     _check(spec)
     grid = load_grid(spec.prices)
     identity = {
         "format": FORMAT,
         "provider": spec.provider,
-        "vens_sha256": _sha256(spec.vens),
+        "vens_sha256": _sha256(vens),
         "prices": {"date": grid["date"], "sha256": _sha256(spec.prices)},
         "default_upstreams": not spec.upstreams,
         "n": spec.n,
     }
-    command = [str(spec.vens), "generate", "--llm", spec.provider, *spec.vens_args, str(spec.report), str(spec.vex)]
+    command = [str(vens), "generate", "--llm", spec.provider, *spec.vens_args, str(spec.report), str(spec.vex)]
     with proxy.running(spec.log, spec.upstreams) as server:
         timing = _timed(command, {**env, **proxy.base_url_env(server.url)}, spec.vex)
     return {**identity, **timing, **summarize(_read_log(spec.log), grid, spec.n)}
@@ -51,28 +52,12 @@ def summarize(records: list[dict], grid: dict, n: int) -> dict:
     by_model: dict[str, dict] = {}
     gaps: Counter = Counter()
     for record in records:
-        if record["provider"] is None:
-            gaps["request outside the provider routes"] += 1
-            continue
-        if record["status"] is None or not 200 <= record["status"] < 300:
-            continue
-        model = record["model"] or "unknown model"
-        stats = by_model.setdefault(
-            model, {"responses": 0, "without_usage": 0, "served": [], "service_tiers": [], "tokens": {}}
-        )
-        stats["responses"] += 1
-        _add_once(stats["served"], record["model_served"])
-        _add_once(stats["service_tiers"], record["service_tier"])
-        counted = usage.tokens(record["provider"], record["usage"])
-        if counted is None:
-            stats["without_usage"] += 1
-            gaps[f"{model}: {record['status']} response without usable usage"] += 1
-            continue
-        stats["tokens"] = _sum(stats["tokens"], counted)
-
+        gap = _tally(record, grid, by_model)
+        if gap:
+            gaps[gap] += 1
     for model, stats in by_model.items():
         stats["usd"], why = price(stats["tokens"], grid["models"].get(model))
-        if stats["without_usage"]:
+        if stats["unpriced"]:
             stats["usd"] = None
         elif why:
             gaps[f"{model}: {why}"] += 1
@@ -94,6 +79,49 @@ def summarize(records: list[dict], grid: dict, n: int) -> dict:
         "usd_per_cve": None if usd is None else usd / n,
         "usd_not_measured": dict(sorted(gaps.items())),
     }
+
+
+def _tally(record: dict, grid: dict, by_model: dict[str, dict]) -> str | None:
+    # Adds one logged request to its model's totals, and returns why its cost
+    # cannot be known, when it cannot.
+    if record["provider"] is None:
+        return "request outside the provider routes"
+    status = record["status"]
+    if status is None and not record["forwarded"]:
+        return None
+    if status is not None and not 200 <= status < 300:
+        return None
+    model = record["model"] or "unknown model"
+    stats = by_model.setdefault(model, {"responses": 0, "unpriced": 0, "served": [], "service_tiers": [], "tokens": {}})
+    if status is None:
+        # The provider got the request and may have billed it.
+        stats["unpriced"] += 1
+        return f"{model}: request sent, no answer"
+    stats["responses"] += 1
+    _add_once(stats["served"], record["model_served"])
+    _add_once(stats["service_tiers"], record["service_tier"])
+    counted = usage.tokens(record["provider"], record["usage"])
+    elsewhere = _served_elsewhere(record, grid["models"].get(model))
+    if counted is not None:
+        stats["tokens"] = _sum(stats["tokens"], counted)
+    if counted is None or elsewhere:
+        stats["unpriced"] += 1
+    if counted is None:
+        return f"{model}: {status} response without usable usage"
+    return f"{model}: {elsewhere}" if elsewhere else None
+
+
+def _served_elsewhere(record: dict, model: dict | None) -> str | None:
+    # The grid prices one tier and one inference geography; a response served
+    # at another one is billed at other rates.
+    if model is None:
+        return None
+    if record["service_tier"] != model["service_tier"]:
+        return f"served at tier {record['service_tier'] or 'unreported'}, grid is {model['service_tier']}"
+    geo = (record["usage"] or {}).get("inference_geo")
+    if geo is not None and geo != model.get("inference_geo"):
+        return f"served at inference_geo {geo}, grid is {model.get('inference_geo') or 'unset'}"
+    return None
 
 
 def price(tokens: dict[str, int], model: dict | None) -> tuple[float | None, str | None]:
@@ -119,6 +147,10 @@ def load_grid(path: Path) -> dict:
         prices = model.get("prices") if isinstance(model, dict) else None
         if not isinstance(prices, dict) or not str(model.get("source", "")).startswith("https://"):
             raise ValueError(f"{path}: {name} needs a source URL and prices")
+        if not isinstance(model.get("service_tier"), str):
+            raise ValueError(f"{path}: {name} needs the service_tier its prices are for")
+        if not isinstance(model.get("inference_geo", ""), str):
+            raise ValueError(f"{path}: {name} inference_geo must be a string")
         for category, rate in prices.items():
             if category not in usage.CATEGORIES:
                 raise ValueError(f"{path}: {name} has an unknown category {category!r}")
@@ -127,13 +159,20 @@ def load_grid(path: Path) -> dict:
     return grid
 
 
+def _executable(path: Path) -> Path:
+    # Resolved once and used to check, hash and launch: Path("./vens") prints
+    # as "vens", which Popen would look up on PATH.
+    resolved = path.resolve()
+    if not resolved.is_file() or not os.access(resolved, os.X_OK):
+        raise ValueError(f"{path} is not an executable file")
+    return resolved
+
+
 def _check(spec: Spec) -> None:
     if spec.n <= 0:
         raise ValueError("--n must be a positive number of CVEs")
     if any(arg == "--llm" or arg.startswith("--llm=") for arg in spec.vens_args):
         raise ValueError("set the provider with --provider: the proxy routes by provider")
-    if not os.access(spec.vens, os.X_OK):
-        raise ValueError(f"{spec.vens} is not an executable")
     for path in (spec.vex, spec.log):
         if path.exists():
             raise ValueError(f"{path} already exists")

@@ -10,6 +10,7 @@
       "columns": "| Model | Base input tokens | 5m cache writes | 1h cache writes | Cache hits and refreshes | Output tokens |",
       "quote": "| Claude Sonnet 4.6 | $3 / MTok | $3.75 / MTok | $6 / MTok | $0.30 / MTok | $15 / MTok |",
       "service_tier": "standard",
+      "inference_geo": "global",
       "prices": {
         "input": 3,
         "cache_write_5m": 3.75,

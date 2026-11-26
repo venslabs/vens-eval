@@ -1,8 +1,10 @@
+import contextlib
 import datetime
 import hashlib
 import io
 import json
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -31,11 +33,14 @@ TEST_GRID = {
         "claude-sonnet-4-6": {
             "provider": "anthropic",
             "source": "https://example.invalid/anthropic",
+            "service_tier": "standard",
+            "inference_geo": "global",
             "prices": {"input": 3, "cache_write_5m": 3.75, "cache_write_1h": 6, "cache_read": 0.3, "output": 15},
         },
         "gpt-5.4-mini": {
             "provider": "openai",
             "source": "https://example.invalid/openai",
+            "service_tier": "default",
             "prices": {"input": 0.75, "cache_read": 0.075, "output": 4.5},
         },
     },
@@ -46,6 +51,16 @@ RUN_FIELDS = {
     "request_bytes", "response_bytes", "models", "tokens", "usd", "usd_per_cve", "usd_not_measured",
 }
 ONE_ANTHROPIC_CALL_USD = (2095 * 3 + 503 * 15) / 1e6
+
+
+@contextlib.contextmanager
+def working_directory(path):
+    previous = os.getcwd()
+    os.chdir(path)
+    try:
+        yield
+    finally:
+        os.chdir(previous)
 
 
 class RunTest(unittest.TestCase):
@@ -168,6 +183,21 @@ class RunTest(unittest.TestCase):
                 existing.unlink()
         self.assertEqual(up.requests, [])
 
+    def test_a_relative_binary_runs_the_file_it_hashed(self):
+        here, decoys = self.root / "here", self.root / "decoys"
+        here.mkdir()
+        decoys.mkdir()
+        shutil.copy2(FAKE_VENS, here / "vens")
+        (decoys / "vens").write_text("#!/bin/sh\nexit 97\n")
+        (decoys / "vens").chmod(0o755)
+        env = self.env()
+        env["PATH"] = f"{decoys}{os.pathsep}{env['PATH']}"
+        with FakeUpstream([Reply(200, anthropic_message(ANTHROPIC_USAGE))]) as up, working_directory(here):
+            result = run.run(self.spec(up, vens=Path("./vens")), env)
+        self.assertEqual(result["exit_code"], 0)
+        self.assertTrue(result["complete"])
+        self.assertEqual(result["vens_sha256"], hashlib.sha256(FAKE_VENS.read_bytes()).hexdigest())
+
     def test_main_writes_the_run_json(self):
         out = self.root / "run.json"
         with FakeUpstream([Reply(200, anthropic_message(ANTHROPIC_USAGE))]) as up:
@@ -185,6 +215,26 @@ class RunTest(unittest.TestCase):
         self.assertTrue(result["complete"])
         self.assertEqual(result["attempts"], 1)
 
+    def test_a_tier_off_the_grid_through_the_proxy(self):
+        with FakeUpstream([Reply(200, openai_completion(OPENAI_USAGE, tier="priority"))]) as up:
+            result = run.run(self.spec(up, provider="openai"), self.env())
+        self.assertIsNone(result["usd"])
+        self.assertEqual(result["usd_not_measured"], {"gpt-5.4-mini: served at tier priority, grid is default": 1})
+
+    def test_main_never_repeats_a_credential_from_an_upstream(self):
+        secret = "sk-test-SECRET-IN-URL"
+        argv = [
+            "--vens", str(FAKE_VENS), "--provider", "openai", "--n", "5",
+            "--input", str(self.report), "--vex", str(self.vex), "--prices", str(self.grid),
+            "--log", str(self.log), "--out", str(self.root / "run.json"),
+            "--upstream", f"openai=https://user:{secret}@gateway.invalid:99999",
+        ]
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+            self.assertEqual(run.main(argv), 2)
+        self.assertIn("vkpi.a9.run:", err.getvalue())
+        self.assertNotIn(secret, err.getvalue())
+        self.assertFalse(self.log.exists())
+
 
 class SummarizeTest(unittest.TestCase):
     def record(self, **changes):
@@ -192,8 +242,14 @@ class SummarizeTest(unittest.TestCase):
             "provider": "anthropic", "endpoint": "/v1/messages", "model": "claude-sonnet-4-6", "attempt": 1,
             "status": 200, "request_bytes": 100, "response_bytes": 50, "start_ns": 1, "end_ns": 2,
             "model_served": "claude-sonnet-4-6", "service_tier": "standard", "usage": ANTHROPIC_USAGE,
-            "error": None, **changes,
+            "error": None, "forwarded": True, **changes,
         }
+
+    def openai_record(self, **changes):
+        return self.record(**{
+            "provider": "openai", "endpoint": "/v1/chat/completions", "model": "gpt-5.4-mini",
+            "model_served": "gpt-5.4-mini-2026-03-17", "service_tier": "default", "usage": OPENAI_USAGE, **changes,
+        })
 
     def test_calls_are_first_attempts(self):
         records = [self.record(status=500, usage=None), self.record(attempt=2), self.record()]
@@ -206,10 +262,51 @@ class SummarizeTest(unittest.TestCase):
         self.assertIsNone(run.summarize([self.record(attempt=None)], TEST_GRID, 1)["calls"])
 
     def test_requests_without_an_answer(self):
-        records = [self.record(status=None, usage=None, error="upstream ConnectionResetError"), self.record()]
-        summary = run.summarize(records, TEST_GRID, 1)
+        sent = self.record(status=None, usage=None, service_tier=None, error="upstream ConnectionResetError")
+        summary = run.summarize([sent, self.record()], TEST_GRID, 1)
         self.assertEqual(summary["statuses"], {"200": 1, "none": 1})
+        self.assertIsNone(summary["usd"])
+        self.assertIsNone(summary["models"]["claude-sonnet-4-6"]["usd"])
+        self.assertEqual(summary["usd_not_measured"], {"claude-sonnet-4-6: request sent, no answer": 1})
+
+    def test_requests_stopped_before_the_provider_cost_nothing(self):
+        stopped = [
+            self.record(status=None, usage=None, service_tier=None, forwarded=False, error=error)
+            for error in ("request without Content-Length", "client ConnectionResetError",
+                          "upstream connect ConnectionRefusedError")
+        ]
+        summary = run.summarize([*stopped, self.record()], TEST_GRID, 1)
+        self.assertEqual(summary["statuses"], {"200": 1, "none": 3})
         self.assertAlmostEqual(summary["usd"], ONE_ANTHROPIC_CALL_USD)
+        self.assertEqual(summary["usd_not_measured"], {})
+
+    def test_responses_served_off_the_grid_are_not_measured(self):
+        us_only = {**ANTHROPIC_USAGE, "inference_geo": "us"}
+        priority = {**ANTHROPIC_USAGE, "service_tier": "priority"}
+        cases = {
+            "openai priority": (self.openai_record(service_tier="priority"),
+                                "gpt-5.4-mini: served at tier priority, grid is default"),
+            "openai flex": (self.openai_record(service_tier="flex"),
+                            "gpt-5.4-mini: served at tier flex, grid is default"),
+            "openai tier unreported": (self.openai_record(service_tier=None),
+                                       "gpt-5.4-mini: served at tier unreported, grid is default"),
+            "anthropic priority": (self.record(service_tier="priority", usage=priority),
+                                   "claude-sonnet-4-6: served at tier priority, grid is standard"),
+            "anthropic us-only": (self.record(usage=us_only),
+                                  "claude-sonnet-4-6: served at inference_geo us, grid is global"),
+        }
+        for name, (record, gap) in cases.items():
+            with self.subTest(name):
+                summary = run.summarize([record], TEST_GRID, 1)
+                self.assertIsNone(summary["usd"])
+                self.assertEqual(summary["usd_not_measured"], {gap: 1})
+                self.assertTrue(summary["tokens"])
+
+    def test_responses_served_on_the_grid_are_priced(self):
+        no_geo = {key: value for key, value in ANTHROPIC_USAGE.items() if key != "inference_geo"}
+        summary = run.summarize([self.record(), self.record(usage=no_geo), self.openai_record()], TEST_GRID, 1)
+        self.assertEqual(summary["usd_not_measured"], {})
+        self.assertAlmostEqual(summary["usd"], 2 * ONE_ANTHROPIC_CALL_USD + (86 * 0.75 + 1920 * 0.075 + 300 * 4.5) / 1e6)
 
     def test_request_outside_the_routes_is_not_measured(self):
         records = [self.record(provider=None, status=None, usage=None, error="unknown route"), self.record()]
@@ -263,9 +360,12 @@ class GridTest(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         model = TEST_GRID["models"]["gpt-5.4-mini"]
+        untiered = {key: value for key, value in model.items() if key != "service_tier"}
         for name, grid in {
             "no date": {**TEST_GRID, "date": None},
             "no source": {**TEST_GRID, "models": {"m": {**model, "source": "http://example.invalid"}}},
+            "no service tier": {**TEST_GRID, "models": {"m": untiered}},
+            "geo not text": {**TEST_GRID, "models": {"m": {**model, "inference_geo": 1}}},
             "text price": {**TEST_GRID, "models": {"m": {**model, "prices": {"input": "0.75"}}}},
             "unknown category": {**TEST_GRID, "models": {"m": {**model, "prices": {"reasoning": 1}}}},
         }.items():
