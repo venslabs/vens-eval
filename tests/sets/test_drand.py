@@ -10,6 +10,7 @@ import random
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from unittest import mock
 
 from vkpi.sets import drand as d
 from vkpi.sets.common import Refused
@@ -202,6 +203,14 @@ class TestFetch(unittest.TestCase):
 
 
 class TestSignature(unittest.TestCase):
+    def test_py_ecc_missing_or_another_version_names_the_extra(self):
+        def missing(name):
+            raise d.metadata.PackageNotFoundError(name)
+        for version, said in ((missing, "needs py-ecc==8.0.0"), (lambda name: "7.0.1", "py-ecc 7.0.1 is installed")):
+            with self.subTest(said=said), mock.patch.object(d.metadata, "version", version):
+                with self.assertRaisesRegex(Refused, rf'{said}.*pip install -e "\.\[sets\]"'):
+                    d.bls_verify(ROUND, bytes.fromhex(SIGNATURE))
+
     def test_the_recorded_rounds_verify(self):
         for round_number in (1, ROUND, OTHER):
             signature = bytes.fromhex(answer("api.drand.sh", round_number)["signature"])

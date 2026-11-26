@@ -8,9 +8,13 @@ The code is public. The sets it builds stay private until they are revealed.
 | `drand` | the public random value of a draw, cross-checked and verified | a beacon record |
 | `sample` | the deterministic stratified sample of a frame | a private selection |
 
-Python 3.12. `pip install -e .` installs the pins of `pyproject.toml`: py_ecc for `drand`'s signature check, scipy for
-`sample`'s integer programs. Tests: `python3 -m unittest` from the repository root, $0 and offline;
-`VKPI_LIVE_DRAND=1` adds one live fetch.
+Python 3.12. The base install of vens-kpi is the standard library alone; the set tools take the `sets` extra,
+`pip install -e ".[sets]"`, which installs the exact pins of `pyproject.toml`: py_ecc for `drand`'s signature check,
+scipy and numpy for `sample`'s integer programs. `commit` needs none of them. Without the extra, `drand`'s signature
+check and `sample` refuse to run and name it, and they refuse any other version of these packages too.
+
+Tests: `python3 -m unittest discover -s tests -t .` from the repository root, $0 and offline; `VKPI_LIVE_DRAND=1` adds
+one live fetch. CI installs the extra before running every test.
 
 ## What stays private
 

@@ -520,10 +520,10 @@ class TestPins(unittest.TestCase):
             def installed(name, package=package, version=version):
                 return version if name == package else real(name)
             with self.subTest(package=package), mock.patch.object(s.metadata, "version", installed):
-                with self.assertRaisesRegex(Refused, f"{package} {version} is installed"):
+                with self.assertRaisesRegex(Refused, rf"{package} {version} is installed.*\.\[sets\]"):
                     s._solver()
 
-    def test_a_missing_package_is_refused(self):
+    def test_a_missing_package_is_refused_and_the_extra_named(self):
         real = s.metadata.version
         for package in ("numpy", "scipy"):
             def installed(name, package=package):
@@ -531,7 +531,7 @@ class TestPins(unittest.TestCase):
                     raise s.metadata.PackageNotFoundError(name)
                 return real(name)
             with self.subTest(package=package), mock.patch.object(s.metadata, "version", installed):
-                with self.assertRaisesRegex(Refused, f"needs {package}=="):
+                with self.assertRaisesRegex(Refused, rf'needs {package}==.*pip install -e "\.\[sets\]"'):
                     s._solver()
 
 

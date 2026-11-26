@@ -136,9 +136,11 @@ def _curve():
     try:
         installed = metadata.version("py-ecc")
     except metadata.PackageNotFoundError as e:
-        raise Refused(f"checking a drand signature needs py-ecc=={PY_ECC_VERSION} (pip install -e .)") from e
+        raise Refused(f"checking a drand signature needs py-ecc=={PY_ECC_VERSION}, from the sets extra: "
+                      'pip install -e ".[sets]"') from e
     if installed != PY_ECC_VERSION:
-        raise Refused(f"py-ecc {installed} is installed; the draw is verified with py-ecc {PY_ECC_VERSION} only")
+        raise Refused(f"py-ecc {installed} is installed; the draw is verified with py-ecc {PY_ECC_VERSION} only, "
+                      'from the sets extra: pip install -e ".[sets]"')
     from py_ecc.bls.hash_to_curve import hash_to_G1
     from py_ecc.bls.point_compression import decompress_G1, decompress_G2
     from py_ecc.optimized_bls12_381 import FQ12, G2, curve_order, final_exponentiate, is_inf, multiply, neg, pairing

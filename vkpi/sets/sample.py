@@ -231,9 +231,10 @@ def _pinned(package, version):
     try:
         installed = metadata.version(package)
     except metadata.PackageNotFoundError as e:
-        raise Refused(f"the sampler needs {package}=={version} (pip install -e .)") from e
+        raise Refused(f'the sampler needs {package}=={version}, from the sets extra: pip install -e ".[sets]"') from e
     if installed != version:
-        raise Refused(f"{package} {installed} is installed; the sampler runs on {package} {version} only")
+        raise Refused(f"{package} {installed} is installed; the sampler runs on {package} {version} only, from the "
+                      'sets extra: pip install -e ".[sets]"')
 
 
 def _solver():
