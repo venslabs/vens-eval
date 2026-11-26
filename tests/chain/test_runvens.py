@@ -9,10 +9,10 @@ import time
 import unittest
 from unittest import mock
 
-from chain import attempt, campaign, read, runvens
-from tests import support as s
+from vkpi.chain import attempt, runvens
+from tests.chain import support as s
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # Variables Python sets in its own environment at startup, not given by the runner.
 PYTHON_ADDS = {"LC_CTYPE", "__CF_USER_TEXT_ENCODING"}
 
@@ -21,7 +21,7 @@ PYTHON_ADDS = {"LC_CTYPE", "__CF_USER_TEXT_ENCODING"}
 PARENT = r'''
 import os, signal, sys, time
 sys.path.insert(0, ROOT)
-from chain import runvens
+from vkpi.chain import runvens
 real = getattr(runvens, HOOK)
 
 def hooked(*args, **kw):

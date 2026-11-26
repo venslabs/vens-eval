@@ -11,7 +11,7 @@ import os
 import re
 from dataclasses import dataclass
 
-from chain.errors import Refused
+from vkpi.chain.errors import Refused
 
 PLANNED, ADJUSTMENT = "planned", "adjustment"
 AGAIN_OMISSION, AGAIN_UNREADABLE, HALF = "again_omission", "again_unreadable", "half"

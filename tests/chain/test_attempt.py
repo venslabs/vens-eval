@@ -6,8 +6,8 @@ import re
 import tempfile
 import unittest
 
-from chain import attempt, dispatch
-from tests import support as s
+from vkpi.chain import attempt
+from tests.chain import support as s
 
 B = "CVE-2099-0002"
 
@@ -422,7 +422,8 @@ class TestNames(unittest.TestCase):
                                 "vens_ref": "9ac9ef4", "dispatch_id": None})
 
     def test_run_meta_with_a_dispatch_id(self):
-        title = dispatch.title("2026-09-23", "openai", "gpt-5.4-mini-2026-03-17", 1, "b7c0435", "0f3c9a2b7d41")
+        title = ("baseline · 2026-09-23 · openai/gpt-5.4-mini-2026-03-17 · batch 1 · x1 · vens b7c0435 · "
+                 "dispatch 0f3c9a2b7d41")
         meta = attempt.run_meta({"id": 7, "display_title": title})
         self.assertEqual((meta["model"], meta["vens_ref"], meta["replicates"], meta["dispatch_id"]),
                          ("gpt-5.4-mini-2026-03-17", "b7c0435", 1, "0f3c9a2b7d41"))

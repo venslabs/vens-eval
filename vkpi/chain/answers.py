@@ -5,8 +5,8 @@ lists, marked `unrated`, the CVEs of its failing batch already answered, with th
 """
 import collections
 
-from chain.cdx import FACTORS
-from chain.errors import Refused, load_json
+from vkpi.chain.cdx import FACTORS
+from vkpi.chain.errors import Refused, load_json
 
 
 def load(path):

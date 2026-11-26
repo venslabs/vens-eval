@@ -4,9 +4,9 @@ import os
 import tempfile
 import unittest
 
-from chain import calls as callmod
-from chain import recovery, venslog
-from tests import support as s
+from vkpi.chain import calls as callmod
+from vkpi.chain import recovery, venslog
+from tests.chain import support as s
 
 A, B = "CVE-2099-0001", "CVE-2099-0002"
 TEN = [f"CVE-2099-{i:04d}" for i in range(1, 11)]

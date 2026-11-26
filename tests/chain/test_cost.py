@@ -2,9 +2,9 @@ import os
 import tempfile
 import unittest
 
-from chain import calls as callmod
-from chain import cost
-from tests import support as s
+from vkpi.chain import calls as callmod
+from vkpi.chain import cost
+from tests.chain import support as s
 
 
 class TestEstimate(unittest.TestCase):

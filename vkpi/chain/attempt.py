@@ -33,11 +33,10 @@ complete attempt. What a folder does not say stays an explicit unknown.
 import os
 import re
 
-from chain import answers as answersmod
-from chain import dispatch
-from chain import calls as callmod
-from chain import cdx, cost, recovery, venslog
-from chain.errors import Refused, load_object
+from vkpi.chain import answers as answersmod
+from vkpi.chain import calls as callmod
+from vkpi.chain import cdx, cost, recovery, venslog
+from vkpi.chain.errors import Refused, load_object
 
 COMPLETE, FAILED = "complete", "failed"
 SCORING, LATER_STEP, INTERRUPTED = "scoring", "later_step", "interrupted"
@@ -228,7 +227,7 @@ def _stopped_failure(kind, step, conclusion, detail):
 
 
 def _excluded(line):
-    return STRAY if (line or {}).get("action") == dispatch.STRAY else None
+    return STRAY if (line or {}).get("action") == "stray" else None  # dispatch.STRAY, not vendored
 
 
 def _from_record(rj, provenance_present, job):

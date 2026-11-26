@@ -55,3 +55,37 @@ The two excerpts are whole lines of their source, in order, nothing else:
 - **`cost` is vendored beyond the list,** because `attempt` imports it for each attempt's cost estimate. It uses the
   standard library alone and imports nothing else of `chain`.
 - **`dispatch` is not vendored.** `attempt` reads one name from it, `STRAY`.
+
+## Adaptations
+
+The second commit of this import, one line per change, behavior unchanged:
+- `vkpi/chain/answers.py`: imports `cdx` and `errors` from `vkpi.chain`, not `chain`.
+- `vkpi/chain/calls.py`: imports `errors` from `vkpi.chain`, not `chain`.
+- `vkpi/chain/cdx.py`: imports `errors` from `vkpi.chain`, not `chain`.
+- `vkpi/chain/recovery.py`: imports `calls` and `venslog` from `vkpi.chain`, not `chain`.
+- `vkpi/chain/attempt.py`: imports `answers`, `calls`, `cdx`, `cost`, `recovery`, `venslog` and `errors` from
+  `vkpi.chain`, not `chain`, and no longer imports `dispatch`.
+- `vkpi/chain/attempt.py`: `_excluded` compares with `"stray"`, the value of `dispatch.STRAY` at the commit, instead of
+  reading it from `dispatch`.
+- `tests/chain/test_answers.py`, `test_cost.py`, `test_recovery.py`, `test_venslog.py`: import from `vkpi.chain`, and
+  `support` from `tests.chain`.
+- `tests/chain/test_attempt.py`: imports `attempt` from `vkpi.chain`, `support` from `tests.chain`, and no `dispatch`.
+- `tests/chain/test_attempt.py`: `test_run_meta_with_a_dispatch_id` writes out the title `dispatch.title(...)` returns
+  at the commit for the same arguments, instead of calling it.
+- `tests/chain/test_runvens.py`: imports `attempt` and `runvens` from `vkpi.chain`, without the `campaign` and `read`
+  the excerpt does not use, and `support` from `tests.chain`.
+- `tests/chain/test_runvens.py`: `ROOT` is three folders up, the repo root, as the file sits in `tests/chain/`.
+- `tests/chain/test_runvens.py`: `PARENT` imports `runvens` from `vkpi.chain`.
+- `tests/chain/test_contract.py`: imports `contract` from `vkpi.chain`, without the `runvens`, `venslog` and `verdicts`
+  the excerpt does not use.
+
+Every other file is byte for byte the source's. No module reads a path of vens-benchmark's layout: `runvens`,
+`attempt` and `calls` only join names inside the attempt folder their caller gives them. Docstrings and
+comments stay as written, so the files they name (`ctx_runner.py`, `chain/campaign.py`, `chain/verdicts.py`,
+`java/Check4.java`) are vens-benchmark's. `tests/chain/support.py`'s `FIXTURES` names `tests/chain/fixtures/`, which is
+not vendored: only the source's Java tests read it.
+
+## Dependencies
+
+The standard library alone, on Python 3.12, the source's CI pinning 3.12.12. POSIX only: `runvens` uses
+`os.killpg` and `select` on pipes.

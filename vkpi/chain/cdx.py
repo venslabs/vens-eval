@@ -2,7 +2,7 @@
 import base64
 import collections
 
-from chain.errors import Refused, load_json
+from vkpi.chain.errors import Refused, load_json
 
 FACTORS = ("SL", "M", "O", "S", "ED", "EE", "A", "ID", "LC", "LI", "LAV", "LAC", "FD", "RD", "NC", "PV")
 # The attestation fields the chain reads. raw_response is never one of them: the chain reads what vens published.

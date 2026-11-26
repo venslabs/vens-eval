@@ -1,6 +1,6 @@
 import unittest
 
-from chain import contract, runvens, venslog, verdicts
+from vkpi.chain import contract
 
 
 class TestTheCheck(unittest.TestCase):

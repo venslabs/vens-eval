@@ -5,8 +5,8 @@ The planned calls are one per batch and question asked, plus the adjustments. On
 counters give the total; on a failed run a split whose first half stopped the run made one call less, so the calls
 are counted from the archive there.
 """
-from chain import calls as callmod
-from chain import venslog
+from vkpi.chain import calls as callmod
+from vkpi.chain import venslog
 
 
 def _count(kinds, *wanted):

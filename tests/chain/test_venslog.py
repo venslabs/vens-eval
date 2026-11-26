@@ -1,7 +1,7 @@
 import unittest
 
-from chain import venslog
-from tests import support as s
+from vkpi.chain import venslog
+from tests.chain import support as s
 
 
 class TestFields(unittest.TestCase):
