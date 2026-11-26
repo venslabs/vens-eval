@@ -6,3 +6,5 @@ The code in this repository is licensed under the Apache License, Version 2.0 (s
 The specification, its text and future data sets are licensed under the Creative Commons Attribution 4.0 International License, CC BY 4.0 (see LICENSE-CC-BY-4.0).
 
 Code later taken from venslabs/vens-benchmark (Apache-2.0) will name its source commit.
+
+The code in vkpi/chain/ and tests/chain/ comes from venslabs/vens-benchmark at commit 0f6d16431baf4b53ad8d2e1dc5cbb2b0bd712300, under Apache-2.0 (see vkpi/chain/PROVENANCE.md).
