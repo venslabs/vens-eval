@@ -1,3 +1,4 @@
+# Changed from venslabs/vens-benchmark@0f6d164: see vkpi/chain/PROVENANCE.md.
 """One attempt's folder, complete or failed: what was run, how it ended and what it left.
 
 Two runners leave such a folder. vens-demo's baseline.yml uploads one artefact per attempt,

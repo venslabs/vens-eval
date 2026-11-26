@@ -1,3 +1,4 @@
+# Changed from venslabs/vens-benchmark@0f6d164: see vkpi/chain/PROVENANCE.md.
 """The attempt record: its four outcomes told apart, and a download made before the record
 read with its added fields unknown, none inferred."""
 import json

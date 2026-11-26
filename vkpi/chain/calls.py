@@ -1,3 +1,4 @@
+# Changed from venslabs/vens-benchmark@0f6d164: see vkpi/chain/PROVENANCE.md.
 """A run's debug folder (`vens generate --debug-dir`): its calls, what each asked, and which were planned.
 
 A call is three files, `batch-NNNNN.system.prompt`, `.human.prompt` and `.response`, numbered in call order; a call

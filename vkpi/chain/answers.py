@@ -1,3 +1,4 @@
+# Changed from venslabs/vens-benchmark@0f6d164: see vkpi/chain/PROVENANCE.md.
 """answers.json, which the after writes once per run under --debug-dir, failed runs included.
 
 Per CVE, each factor's answer as the reply wrote it, its reading, its level and the level's source; a failed run also

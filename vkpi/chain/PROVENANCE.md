@@ -45,7 +45,7 @@ The two excerpts are whole lines of their source, in order, nothing else:
 - `test_contract.py`: lines 13-14, 18, 35-37, 100-107 and 464-465 of `tests/test_verdicts.py`. This is the one contract
   test that needs no scenario corpus.
 
-`vkpi/__init__.py` and `tests/__init__.py` are new and empty.
+`vkpi/__init__.py` and `tests/__init__.py` are this repo's own, empty, and not taken from the source.
 
 ## Scope
 
@@ -58,7 +58,11 @@ The two excerpts are whole lines of their source, in order, nothing else:
 
 ## Adaptations
 
-The second commit of this import, one line per change, behavior unchanged:
+The changes after the byte-for-byte copy, one line per change, behavior unchanged:
+- `vkpi/chain/answers.py`, `attempt.py`, `calls.py`, `cdx.py`, `recovery.py` and `tests/chain/test_answers.py`,
+  `test_attempt.py`, `test_contract.py`, `test_cost.py`, `test_recovery.py`, `test_runvens.py`, `test_venslog.py`: a
+  first line, `# Changed from venslabs/vens-benchmark@0f6d164: see vkpi/chain/PROVENANCE.md.`, the notice Apache-2.0
+  §4(b) asks of a changed file.
 - `vkpi/chain/answers.py`: imports `cdx` and `errors` from `vkpi.chain`, not `chain`.
 - `vkpi/chain/calls.py`: imports `errors` from `vkpi.chain`, not `chain`.
 - `vkpi/chain/cdx.py`: imports `errors` from `vkpi.chain`, not `chain`.
@@ -89,3 +93,27 @@ not vendored: only the source's Java tests read it.
 
 The standard library alone, on Python 3.12, the source's CI pinning 3.12.12. POSIX only: `runvens` uses
 `os.killpg` and `select` on pipes.
+
+## Known staleness
+
+This code encodes older vens rules: those of vens-benchmark's step 4, not those of the v0.7.0 candidate (#436's head,
+`34ef2a1`), and only some of R's (v0.6.0, `2654ca7`). A later PR that reads candidate or R output with it must guard
+against each point below. Line numbers are this tree's. Measured on 2026-11-26 through `runvens.generate`, on vens's
+mock LLM at batch 1, with binaries built from `34ef2a1` and `2654ca7` (`vcs.modified=false`), at $0 and with no key:
+- **`contract.py` states vens `b7c0435`'s rules, not the candidate's.** Nothing in `vkpi/chain` imports it. On
+  vens-benchmark's `comp_gdpr` scenario it expects 9 questions, M, O, EE, LC, LAC, FD, RD, NC and PV, where the
+  candidate asks 6: M, O, EE, LAC, NC and PV. The candidate's `answers.json` also gives 6 other sources: SL
+  `worst_case` (`contract.py`: `constant`), LC `cvss` (`answer`), LI and LAV `cvss` (`floor`), FD and RD `criticality`
+  (`answer`).
+- **`__init__.py:4` and `cdx.py:63-68` describe L × max(T, B).** The candidate rates L × the impact of the declared
+  basis, named in each VEX vulnerability's `vens:impact-basis`: business when `data_subjects` is declared, technical
+  otherwise. Given v0.6.0's quickstart config with the marker, a technical basis, the candidate scores all 45 CVEs
+  L × T, and 20 of those scores differ from L × max(T, B).
+- **`cdx.py:71-92`, `main_severity` and `main_rule`, are vens `43ab10b`'s rule.** It holds for R: `pkg/riskconfig` and
+  `pkg/owasp` are unchanged from `43ab10b` to `2654ca7`, and v0.6.0's 45 ratings of its own quickstart pass
+  `main_rule`.
+- **`runvens.py:271-272` passes `--strict`, which v0.6.0 refuses:** it exits 1 with `unknown flag: --strict`.
+- **`runvens.py:67-76`, `add_marker`, bypasses the candidate's E1.** The candidate refuses a config without
+  `schema_version` ("has no schema_version: it was written for vens v0.6 or earlier (schema 1)") and asks for a
+  migration that reconfirms `business_criticality`. v0.6.0's quickstart config, with the marker added, loads on the
+  candidate and rates its 45 CVEs.

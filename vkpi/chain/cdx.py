@@ -1,3 +1,4 @@
+# Changed from venslabs/vens-benchmark@0f6d164: see vkpi/chain/PROVENANCE.md.
 """The scanner's report, the VEX vens publishes and its attestation, read as published."""
 import base64
 import collections

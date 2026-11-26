@@ -1,3 +1,4 @@
+# Changed from venslabs/vens-benchmark@0f6d164: see vkpi/chain/PROVENANCE.md.
 """The recovery calls, every call beyond the planned ones, asked_again + 2 x splits, by kind, on synthetic summaries,
 logs and archives with known counts; vens's mock never asks again after an unreadable reply nor splits a call."""
 import os
