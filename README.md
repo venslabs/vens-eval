@@ -1,10 +1,10 @@
-# vens-eval
+# vens-kpi
 
-The evaluation framework for [vens](https://github.com/venslabs/vens): what is measured on a vens release, how the results are read, and later the scripts that run it.
+The evaluation framework for [vens](https://github.com/venslabs/vens): the KPIs measured on a vens release, how they are read, and later the scripts that run them. A KPI is the measured quantity on one line of an axis; an axis is read by state, never as one number.
 
 ## Status
 
-**DRAFT, not frozen.** The spec is [`spec/1.0/vens-eval-1.0.md`](spec/1.0/vens-eval-1.0.md). The maintainer chose V1 to V4, V6 and V7 on 2026-11-26; none of them is signed yet, and V5 stays open until the human panel. Nothing in this repo is yet a verdict on any vens release.
+**DRAFT, not frozen.** The spec is [`spec/1.0/vens-kpi-1.0.md`](spec/1.0/vens-kpi-1.0.md). The maintainer chose V1 to V4, V6 and V7 on 2026-11-26; none of them is signed yet, and V5 stays open until the human panel. Nothing in this repo is yet a verdict on any vens release.
 
 ## The nine axes
 
@@ -46,7 +46,7 @@ Read in tiers 0 to 3, with no weights, sums or averages between axes. R is the l
 
 ## Related
 
-- [venslabs/vens](https://github.com/venslabs/vens): the CVE prioritizer that vens-eval evaluates.
+- [venslabs/vens](https://github.com/venslabs/vens): the CVE prioritizer that vens-kpi evaluates.
 - [venslabs/vens-benchmark](https://github.com/venslabs/vens-benchmark): benchmarking LLMs for context-aware CVE risk scoring, for vens.
 
 ## License
