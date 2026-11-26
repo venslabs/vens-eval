@@ -1,0 +1,9 @@
+# v0.7.0 refuses a config without schema_version; v0.6.0 ignores the key.
+schema_version: 2
+project:
+  name: "a9-plumbing"
+  description: "fixture for the A9 proxy test"
+context:
+  exposure: "internet"
+  data_sensitivity: "high"
+  business_criticality: "high"
