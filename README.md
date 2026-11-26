@@ -32,6 +32,8 @@ Read in tiers 0 to 3, with no weights, sums or averages between axes. R is the l
 
 ## Delivery verdicts
 
+A campaign is read in stages (spec §3), and every verdict carries its stage: "verdict at stage k of 3 (V2 incomplete)", "at stage 3 (V2 complete)" or "at stage 4 (extension)".
+
 - **validated without waiver**: every blocking line measured at P2 (frozen protocol, fresh answers, same window) and SATISFIED or PROGRESS ESTABLISHED.
 - **shipped under waivers**: each FAILED covered by a waiver sheet, each UNDETERMINED and NOT MEASURED shown, nothing that cannot be waived.
 - **inconclusive**: the evidence does not allow the conclusion sought.
