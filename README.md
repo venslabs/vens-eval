@@ -1,6 +1,6 @@
 # vens-kpi
 
-The evaluation framework for [vens](https://github.com/venslabs/vens): the KPIs measured on a vens release, how they are read, and later the scripts that run them. A KPI is the measured quantity on one line of an axis; an axis is read by state, never as one number.
+The evaluation framework for [vens](https://github.com/venslabs/vens): the KPIs measured on a vens release, how they are read, and the result for each vens release. A KPI is the measured quantity on one line of an axis; an axis is read by state, never as one number.
 
 ## Status
 
@@ -42,9 +42,7 @@ A campaign is read in stages (spec §3), and every verdict carries its stage: "v
 ## What comes next
 
 - The frozen spec, with its hash and its signatures.
-- Scripts: `check` ($0, on a mock), `run` (your key, a spend cap), `read` (recompute a published verdict), `verify` (check the commitments).
-- Sealed sets, published only as salted hashes and revealed after use.
-- Daily data releases, at $0.
+- The evaluation of each vens release, run by following the spec, with its result published here.
 
 ## Related
 
