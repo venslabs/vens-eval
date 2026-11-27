@@ -1,8 +1,8 @@
-> **DRAFT, not frozen.** Left before signing: Fable's and GPT's review of this revision, then both reviewers' signatures and the maintainer's approval on the English text and its hash (§6). The maintainer's values are chosen, to be signed with the frozen file; V3 becomes a campaign parameter, and V5 stays open, with a signed deferral allowed (§7).
+> **Signed on 2026-11-27.** This English text is the normative vens-kpi 1.0. Its SHA-256 and the signatures are in [`SIGNATURES.md`](../../SIGNATURES.md). A change to a rule means a new version (§6). V3 is a campaign parameter, and V5 stays open, with a signed deferral allowed (§7).
 
 # vens-kpi/1.0
 
-Evaluation framework for vens: a merge of the texts signed in round 2 by Claude Fable 5.2 and GPT-6.1 Sol, following the coordinator's rulings (2026-11-25). To be signed by both reviewers, then by the maintainer; values V1, V2, V4, V6, V7 and A6's margin chosen by the maintainer on 2026-11-26, V3 left to each campaign, V5 open (§7).
+Evaluation framework for vens: a merge of the texts signed in round 2 by Claude Fable 5.2 and GPT-6.1 Sol, following the coordinator's rulings (2026-11-25). Signed by both reviewers on 2026-11-26, then by the maintainer on 2026-11-27; values V1, V2, V4, V6, V7 and A6's margin chosen by the maintainer on 2026-11-26, V3 left to each campaign, V5 open (§7).
 
 ## 1. Purpose
 
