@@ -1,0 +1,9 @@
+{
+  "aggregate": "df26654a9e08fa7bfa54b025b8478a82f8bebdfbb4c6e4225814dcdba613e3f0",
+  "files": {
+    "frame.jsonl": "9d18b464b03fec32f01577354f69e04d42f74eca9a215183af14d512d6845bed",
+    "sentinels.jsonl": "6b2d012c1060fae0d334a277504674b8b541e4724fa017a6b792785673c800c8"
+  },
+  "format": "vens-kpi/1.0/commitments",
+  "set": "frame-v0.7.0"
+}

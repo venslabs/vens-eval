@@ -1,0 +1,25 @@
+{
+  "aggregate": "5eb5b13964f26067c43d580dece4b1054833349c95f1391e899fe346b4d9f412",
+  "files": {
+    "build-check.json": "fe3d16664807cc7da636bb157e6f1090e0c6452eba3693ac4fdc1ded81aebcce",
+    "loadcheck.json": "f9d6e3a7050b2dcf75c51d790e1992a6a242d611dd734997a4c101c6f3a1304b",
+    "loadcheck.py": "cd18ec035ab6ceb18f83dccb6b3022dd7b70e4a95d562df7be2260abd5b3c84c",
+    "method.md": "81bf6268bf7b907d4fe021cc7307d199b9037ad0b35f5def16926b9dd97417ba",
+    "paraphrase-check.json": "85ca0fabb46b173d7176d5fc5ae98e7fd9eaaa20abbde9c00cfe311a0f060cc6",
+    "paraphrases.json": "789f8aeadc3a7c66721888cd8de3773f5d575f70d542f652fce12d586ed9b378",
+    "placements.json": "d66ed6c5f339f62b9876e9f7d1f6f93888de041583724b080f1e7db9dd36cd70",
+    "reports/base.trivy.json": "0840f28e0ba6a4cb9bdd73e05c3426569f9f3af0f2c1a810eeb0f53f54978c3d",
+    "reports/paraphrase.trivy.json": "3a7dfbf84e6ef86db919bfd401cfd021ecd9a6288b2dd06e39b2288163d8d6f2",
+    "reports/planted-critical.trivy.json": "dd67eab37197e1790053ff1c039f2c501623eb3bb965311e645ad8d685280c15",
+    "reports/planted-low.trivy.json": "3d7f745b153bcedc5d9835f127903f2200a021205f65be6e56df4317b70e3ba1",
+    "runs.json": "f30d922dca1e0bb4910665b2127a3c1680e5b8e69b05243c00c416c67c2350c6",
+    "same-facts/fable-5.2.json": "f8a1a7c23788913d6a6b9dd8dd848d48c744f97bebce8b28710893b32af9c64c",
+    "same-facts/gpt-6.1-sol.json": "170e4f32f89a485695892bd3e988198b773f7289354244522401e2ab1d6669fc",
+    "same-facts/key.json": "38d9d7d1e0dab155a7bff101e5f25f5173799301df6ef93f73a75cede3269f9e",
+    "same-facts/labels.json": "966919e33859c3b22dda1d56a281d3d0ca435abe4aaa1b138cc43498d780baa8",
+    "same-facts/packet.md": "459456e8b20a881ec09a6b4482b7e963590816c3a782b0ff1d69b41f3b183d04",
+    "selection.json": "a54fe07a6b7c510c2c7a5d39ce97fc9a30fbd12cfddb084815f6e85263339fbf"
+  },
+  "format": "vens-kpi/1.0/commitments",
+  "set": "inv-data-v0.7.0"
+}
