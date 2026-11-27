@@ -1,0 +1,16 @@
+{
+  "aggregate": "92dd771f65793c3c3b5747872c717bf5b0c982689267b363dc18d26d4d5fa935",
+  "files": {
+    "c1.yaml": "bd8f0743d955f2dc022198c2b5ef8cbb0926a0be54c083f3c9af72c77094d397",
+    "c2.yaml": "6787ac20982647b779d148c5ca8356bb4f1254d192ca0bc8764787d4a11f39d7",
+    "c3.yaml": "0994a0ac4e80295fdda24318d2517531539e6e6d29bbf40a89fd0eac4b8406b2",
+    "labels.jsonl": "d51212f35d85066a7029782dd25191ebd6f373d620a353a7a12128a02ee01123",
+    "main.trivy.json": "cb85c7fb65a21333f6440c170404d9e2a9c628a9e98577e48803f23508f1c57b",
+    "selection.json": "df7efdf8822eab2b3ae0731f0a89723063827a23791489691648a4cab18029dd",
+    "sentinel-labels.jsonl": "ca2fd28483e53eb4e3851657b19ae8e11a615d55cd615753dd49161d50243f19",
+    "sentinels-selection.json": "1c086e6a79245b115ad4cf5f75b2ddd4ce4246ec1f82c2dcd5053b770c034491",
+    "sentinels.trivy.json": "07be8c803681da7875b0e8a88ea4242bd9e97951a2970b5ccd325430bcfc9ea0"
+  },
+  "format": "vens-kpi/1.0/commitments",
+  "set": "sealed-v0.7.0"
+}
