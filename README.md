@@ -4,7 +4,7 @@ The evaluation framework for [vens](https://github.com/venslabs/vens): the KPIs 
 
 ## Status
 
-**DRAFT, not frozen.** The spec is [`spec/1.0/vens-kpi-1.0.md`](spec/1.0/vens-kpi-1.0.md). The maintainer chose V1 to V4, V6 and V7 on 2026-11-26; none of them is signed yet, and V5 stays open until the human panel. Nothing in this repo is yet a verdict on any vens release.
+**Signed on 2026-11-27.** The spec is [`spec/1.0/vens-kpi-1.0.md`](spec/1.0/vens-kpi-1.0.md), normative in English; its hash and the signatures are in [`SIGNATURES.md`](SIGNATURES.md). The maintainer chose V1, V2, V4, V6, V7 and A6's margin on 2026-11-26 and signed them with the spec. V3 is now a campaign parameter: the spec says how to evaluate, and each campaign brings its own data under the spec's conditions. V5 stays open, with a signed deferral allowed. Nothing in this repo is yet a verdict on any vens release.
 
 ## The nine axes
 
@@ -34,9 +34,9 @@ Read in tiers 0 to 3, with no weights, sums or averages between axes. R is the l
 
 A campaign is read in stages (spec §3), and every verdict carries its stage: "verdict at stage k of 3 (V2 incomplete)", "at stage 3 (V2 complete)" or "at stage 4 (extension)".
 
-- **validated without waiver**: every blocking line measured at P2 (frozen protocol, fresh answers, same window) and SATISFIED or PROGRESS ESTABLISHED.
-- **shipped under waivers**: each FAILED covered by a waiver sheet, each UNDETERMINED and NOT MEASURED shown, nothing that cannot be waived.
-- **inconclusive**: the evidence does not allow the conclusion sought.
+- **validated without waiver**: every blocking line measured at P2 (frozen protocol, fresh answers, same window, read by the frozen reader) and SATISFIED or PROGRESS ESTABLISHED.
+- **shipped under waivers**: the maintainer signs the delivery; each FAILED covered by a waiver sheet, each UNDETERMINED and NOT MEASURED shown and accepted by name, nothing that cannot be waived.
+- **inconclusive**: none of the other three verdicts applies, including when P2 evidence is insufficient.
 - **requirements not met**: a failure without a waiver sheet, or one that cannot be waived.
 
 ## What comes next
